@@ -1,0 +1,3 @@
+WORK > DEFAULT
+DEFAULT : ./work
+OTHERS = /home/liukunsong/vivado_IP_sim/vcs_ip_lib/synopsys_sim.setup
