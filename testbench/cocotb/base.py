@@ -15,11 +15,7 @@ class BaseTransaction(ABC):
     """
     pass
 
-    @abstractmethod
-    def compare(self, *args, **kwargs):
-        pass
-
-class BaseSwModel(ABC):
+class BaseModel(ABC):
     """
     软件模型基类
     根据input_moniter捕获的输入计算期望结果
@@ -86,16 +82,16 @@ class BaseScoreboard(ABC):
 
 class CoSimBase(ABC):
     """软硬件协同验证基类：负责协调软件模型、硬件Driver和Monitor的交互"""
-    def __init__(self, dut, sw_model: BaseSwModel, hw_driver: BaseDriver, hw_input_monitor: BaseMonitor, hw_output_monitor: BaseMonitor, scoreboard: BaseScoreboard, name="CoSimBase"):
+    def __init__(self, dut, model: BaseModel, driver: BaseDriver, input_moniter: BaseMonitor, output_monitor: BaseMonitor, scoreboard: BaseScoreboard, name="CoSimBase"):
         self.dut = dut
         self.log = logging.getLogger(f"cocotb.{name}")
         self.in_queue = Queue() #TODO:Queue能这样用吗，研究一下
         self.act_queue = Queue()
         self.exp_queue = Queue()
-        self.sw_model = sw_model(self.in_queue, self.exp_queue)
-        self.hw_driver = hw_driver(self.dut)
-        self.hw_input_monitor = hw_input_monitor(self.in_queue)
-        self.hw_output_monitor = hw_output_monitor(self.act_queue) 
+        self.model = model(self.in_queue, self.exp_queue)
+        self.driver = driver(self.dut)
+        self.input_moniter = input_moniter(self.in_queue)
+        self.output_monitor = output_monitor(self.act_queue) 
         self.scoreboard = scoreboard(self.act_queue, self.exp_queue)
         
     @abstractmethod
