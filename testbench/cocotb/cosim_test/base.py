@@ -28,7 +28,7 @@ class BaseModel(ABC):
         cocotb.start_soon(self.run())
 
     @abstractmethod
-    async def run(self):
+    async def run(self, *args, **kwargs):
         """
         将in_queue的值作为输入，计算期望结果并压入exp_queue  
         """
@@ -61,7 +61,7 @@ class BaseMonitor(ABC):
         cocotb.start_soon(self.run())
 
     @abstractmethod
-    async def run(self):
+    async def run(self, *args, **kwargs):
         pass
 
 class BaseScoreboard(ABC):
@@ -73,7 +73,7 @@ class BaseScoreboard(ABC):
         cocotb.start_soon(self.run())
 
     @abstractmethod
-    async def run(self):
+    async def run(self, *args, **kwargs):
         pass
 
 # ==========================================

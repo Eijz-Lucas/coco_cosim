@@ -17,52 +17,52 @@ from cocotb.clock import Clock
 #         addr = int(addr_sig.value)
 #         rdata_sig.value = int(memory.read(0,addr,1))
 
-class add_one_input_trans(BaseTransaction):
+class sub_one_input_trans(BaseTransaction):
     addr_add:int
     len_add:int
     ram_rdata_add:list
     
-class add_one_output_trans(BaseTransaction):
+class sub_one_output_trans(BaseTransaction):
     fifo_write_data_add:int
     
-class add_one_model(BaseModel):
-    def __init__(self, in_queue, exp_queue, name="add_one_sw_model"):
+class sub_one_model(BaseModel):
+    def __init__(self, in_queue, exp_queue, name="sub_one_sw_model"):
         super().__init__(in_queue, exp_queue, name)
 
     def run(self):
         pass
 
-class add_one_driver(BaseDriver):
-    def __init__(self, dut, name="add_one_driver"):
+class sub_one_driver(BaseDriver):
+    def __init__(self, dut, name="sub_one_driver"):
         super().__init__(dut, name)
 
     async def run(self, inst):
         pass
 
-class add_one_output_monitor(BaseMonitor):
-    def __init__(self, dut, act_queue, name="add_one_output_monitor"):
+class sub_one_output_monitor(BaseMonitor):
+    def __init__(self, dut, act_queue, name="sub_one_output_monitor"):
         super().__init__(dut, act_queue, name)
 
     async def run(self):
         pass
 
-class add_one_input_monitor(BaseMonitor):
-    def __init__(self, dut, in_queue, name="add_one_input_monitor"):
+class sub_one_input_monitor(BaseMonitor):
+    def __init__(self, dut, in_queue, name="sub_one_input_monitor"):
         super().__init__(dut, in_queue, name)
     
     async def run(self):
         pass
                     
-class add_one_scoreboard(BaseScoreboard):
-    def __init__(self, act_queue, exp_queue, name="add_one_scoreboard"):
+class sub_one_scoreboard(BaseScoreboard):
+    def __init__(self, act_queue, exp_queue, name="sub_one_scoreboard"):
         super().__init__(act_queue, exp_queue, name)
         
     async def run(self):
         pass
 
-class add_one_cosim(CoSimBase):
+class sub_one_cosim(CoSimBase):
     def __init__(self, dut):
-        super().__init__(dut, add_one_model, add_one_driver, add_one_input_monitor, add_one_output_monitor, add_one_scoreboard) 
+        super().__init__(dut, sub_one_model, sub_one_driver, sub_one_input_monitor, sub_one_output_monitor, sub_one_scoreboard) 
     
     async def execute(self, inst, memory):
         pass

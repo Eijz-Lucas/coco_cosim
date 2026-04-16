@@ -1,23 +1,23 @@
-module cosim_test #(
+module cosim_test_ut #(
     parameter ADDR_WIDTH = 8,
     parameter DATA_WIDTH = 8
 ) (
     input  logic       clk,
     rst_n,
     // add_one
-    input logic en_add,
-    input logic [7:0] addr_add,
-    input logic [7:0] len_add,
+    input  logic       en_add,
+    input  logic [7:0] addr_add,
+    input  logic [7:0] len_add,
     output logic [7:0] ram_addr_add,
-    input logic [7:0] ram_rdata_add,
-    output logic fifo_write_en_add,
+    input  logic [7:0] ram_rdata_add,
+    output logic       fifo_write_en_add,
     output logic [7:0] fifo_write_data_add,
     // sub_one
-    input logic en_sub,
-    input logic [7:0] len_sub,
-    output logic fifo_read_en_sub,
-    input logic [7:0] fifo_read_data_sub,
-    output logic fifo_write_en_sub,
+    input  logic       en_sub,
+    input  logic [7:0] len_sub,
+    output logic       fifo_read_en_sub,
+    input  logic [7:0] fifo_read_data_sub,
+    output logic       fifo_write_en_sub,
     output logic [7:0] fifo_write_data_sub
 );
 
