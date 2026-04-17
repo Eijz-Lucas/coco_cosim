@@ -1,4 +1,4 @@
-module cosim_test_ut #(
+module cosim_test #(
     parameter ADDR_WIDTH = 8,
     parameter DATA_WIDTH = 8
 ) (

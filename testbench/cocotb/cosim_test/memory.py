@@ -1,6 +1,5 @@
 import numpy as np
 # from ml_dtypes import bfloat16, float8_e4m3fn
-from einops import rearrange
 from typing import List, Any, Optional
 from collections import deque
 

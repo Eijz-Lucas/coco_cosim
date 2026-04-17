@@ -5,4 +5,6 @@ class sys_ctrl:
 
     async def execute(self):
         for inst in self.firmware:
-            await self.cosim_wrapper(inst)
+            await self.cosim_wrapper.execute(inst)
+        self.cosim_wrapper.set_drive_done()
+        await self.cosim_wrapper.wait_compare()

@@ -37,3 +37,4 @@ backend/results/
 *.pvk
 outputs/
 reports/
+.vscode

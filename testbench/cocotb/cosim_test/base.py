@@ -22,10 +22,12 @@ class BaseModel(ABC):
     仿真阶段持续运行
     """
     def __init__(self, in_queue, exp_queue, name="SwModel"):
+        self.name = name
         self.log = logging.getLogger(f"cocotb.{name}")
         self.in_queue = in_queue
         self.exp_queue = exp_queue
         cocotb.start_soon(self.run())
+        self.log.info(f"======== {self.name} Initiated ========")
 
     @abstractmethod
     async def run(self, *args, **kwargs):
@@ -41,11 +43,14 @@ class BaseDriver(ABC):
     在UT模式下工作，在ST模式下不实例化
     """
     def __init__(self, dut, name="Driver"):
+        self.name = name
         self.dut = dut
         self.log = logging.getLogger(f"cocotb.{name}")
+        self.log.info(f"======== {self.name} Initiated ========")
 
     @abstractmethod
     async def run(self, *args, **kwargs):
+        self.log.info(f"{self.name} start")
         pass
 
 class BaseMonitor(ABC):
@@ -55,10 +60,12 @@ class BaseMonitor(ABC):
     仿真阶段持续运行
     """
     def __init__(self, dut, queue, name="Monitor"):
+        self.name = name
         self.dut = dut
         self.log = logging.getLogger(f"cocotb.{name}")
         self.queue = queue
         cocotb.start_soon(self.run())
+        self.log.info(f"======== {self.name} Initiated ========")
 
     @abstractmethod
     async def run(self, *args, **kwargs):
@@ -66,11 +73,14 @@ class BaseMonitor(ABC):
 
 class BaseScoreboard(ABC):
     """计分板基类：比对软硬件结果，并根据设定返回特定的结果"""
-    def __init__(self, act_queue, exp_queue, name="Scoreboard"):
+    def __init__(self, clk_sig, act_queue, exp_queue, name="Scoreboard"):
+        self.name = name
+        self.clk_sig = clk_sig
         self.log = logging.getLogger(f"cocotb.{name}")
         self.exp_queue = exp_queue
         self.act_queue = act_queue
         cocotb.start_soon(self.run())
+        self.log.info(f"======== {self.name} Initiated ========")
 
     @abstractmethod
     async def run(self, *args, **kwargs):
@@ -83,16 +93,18 @@ class BaseScoreboard(ABC):
 class CoSimBase(ABC):
     """软硬件协同验证基类：负责协调软件模型、硬件Driver和Monitor的交互"""
     def __init__(self, dut, model: BaseModel, driver: BaseDriver, input_moniter: BaseMonitor, output_monitor: BaseMonitor, scoreboard: BaseScoreboard, name="CoSimBase"):
+        self.name = name
         self.dut = dut
         self.log = logging.getLogger(f"cocotb.{name}")
-        self.in_queue = Queue() #TODO:Queue能这样用吗，研究一下
+        self.in_queue = Queue()
         self.act_queue = Queue()
         self.exp_queue = Queue()
         self.model = model(self.in_queue, self.exp_queue)
         self.driver = driver(self.dut)
-        self.input_moniter = input_moniter(self.in_queue)
-        self.output_monitor = output_monitor(self.act_queue) 
-        self.scoreboard = scoreboard(self.act_queue, self.exp_queue)
+        self.input_moniter = input_moniter(self.dut, self.in_queue)
+        self.output_monitor = output_monitor(self.dut, self.act_queue) 
+        self.scoreboard = scoreboard(dut.clk, self.act_queue, self.exp_queue)
+        self.log.info(f"======== {self.name} Initiated ========")
         
     @abstractmethod
     async def execute(self, *args, **kwargs):
