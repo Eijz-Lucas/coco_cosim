@@ -5,4 +5,5 @@ class sys_ctrl:
 
     async def execute(self):
         for inst in self.firmware:
-            await self.cosim_wrapper.execute(inst)
+            await self.cosim_wrapper.execute(inst, mode="sw")
+        await self.cosim_wrapper.wait_compare()

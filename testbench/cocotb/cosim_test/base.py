@@ -39,6 +39,13 @@ class BaseModel(ABC):
         """
         pass
 
+    @abstractmethod
+    def compute(self, *args:Any, **kwargs:Any) -> Any:
+        """
+        根据输入计算期望结果的函数，run函数中调用
+        """
+        pass
+
 class BaseDriver(ABC):
     """
     硬件驱动基类

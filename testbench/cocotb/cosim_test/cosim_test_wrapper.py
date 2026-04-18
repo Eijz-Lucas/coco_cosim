@@ -58,12 +58,34 @@ class cosim_test_wrapper(CoSimWrapperBase):
         self.ram = ram_model(1,16,1,dut.u_add_one.ram_addr,dut.u_add_one.ram_rdata)
         self.fifo = fifo_model(1,16,dut.clk,dut.u_sub_one.fifo_read_en, dut.u_sub_one.fifo_read_data, dut.u_add_one.fifo_write_en, dut.u_add_one.fifo_write_data, dut.u_sub_one.fifo_write_en, dut.u_sub_one.fifo_write_data)
 
-    async def execute(self, inst):
+    async def execute(self, inst, mode):
         if(self.mode == "ut"):
             await self.wait_compare()
             if(inst["op"] == "add_one"):
-                await self.modules["add_one_cosim"].execute(inst)
+                module = "add_one_cosim"
             if(inst["op"] == "sub_one"):
-                await self.modules["sub_one_cosim"].execute(inst)
+                module = "sub_one_cosim"
+            if mode == "hw":
+                input_trans = None
+            else:
+                input_trans = self.decode(inst)
+            output_trans = await self.modules[module].execute(inst, mode, input_trans)
+            if output_trans is not None:
+                self.fifo.push(output_trans.fifo_write_data)
+                cocotb.log.info(f"[Cosim Wrapper] Pushed output_trans.fifo_write_data={output_trans.fifo_write_data} to fifo")
+            
         elif(self.mode == "st"):
             pass
+        
+    def decode(self, inst):
+        if inst["op"] == "add_one":
+            addr = inst["addr"]
+            length = inst["len"]
+            ram_rdata = self.ram.read(0, addr, length)
+            input_trans = add_one_input_trans(addr=addr, len=length, ram_rdata=ram_rdata)
+            return input_trans
+        if inst["op"] == "sub_one":
+            length = inst["len"]
+            fifo_read_data = self.fifo.pop(length)
+            input_trans = sub_one_input_trans(len=length, fifo_read_data=fifo_read_data)
+            return input_trans

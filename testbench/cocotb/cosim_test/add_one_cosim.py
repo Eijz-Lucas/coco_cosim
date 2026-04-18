@@ -38,13 +38,17 @@ class add_one_model(BaseModel):
         while True:
             trans = await self.in_queue.get()
             self.log.info(f"[Model Input] addr={trans.addr}, len={trans.len}, ram_rdata={trans.ram_rdata}")
-            exp_ram_addr = []
-            for i in range(trans.len):
-                exp_ram_addr.append(trans.addr + i)
-            exp_fifo_write_data = trans.ram_rdata + 1
-            exp_trans = add_one_output_trans(ram_addr=exp_ram_addr, fifo_write_data=exp_fifo_write_data)
-            self.log.info(f"[Model Output] exp_ram_addr={exp_ram_addr}, exp_fifo_data={exp_fifo_write_data}")
+            exp_trans = self.compute(trans)
+            self.log.info(f"[Model Output] exp_ram_addr={exp_trans.ram_addr}, exp_fifo_data={exp_trans.fifo_write_data}")
             self.exp_queue.put_nowait(exp_trans)
+    
+    def compute(self, input_trans: add_one_input_trans) -> add_one_output_trans:
+        exp_ram_addr = []
+        for i in range(input_trans.len):
+            exp_ram_addr.append(input_trans.addr + i)
+        exp_fifo_write_data = input_trans.ram_rdata + 1
+        exp_trans = add_one_output_trans(ram_addr=exp_ram_addr, fifo_write_data=exp_fifo_write_data)
+        return exp_trans 
 
 class add_one_driver(BaseDriver):
     def __init__(self, dut, name="add_one_driver"):
@@ -144,10 +148,17 @@ class add_one_cosim(CoSimBase):
     def __init__(self, dut, name="add_one_cosim"):
         super().__init__(dut, add_one_model, add_one_driver, add_one_input_monitor, add_one_output_monitor, add_one_scoreboard, name) 
     
-    async def execute(self, inst):
+    async def execute(self, inst, mode = "hw", input_trans = None):
         while True:
             await RisingEdge(self.dut.clk)
             if(self.dut.busy.value == 0):
                 break
-        await self.driver.run(inst)
-        self.executed_inst_num = self.executed_inst_num+1
+        if mode == "hw":
+            await self.driver.run(inst)
+            self.executed_inst_num = self.executed_inst_num+1
+        if mode == "sw":
+            self.executed_inst_num = self.executed_inst_num+1
+            self.scoreboard.match_count += 1
+            output_trans = self.model.compute(input_trans)
+            cocotb.log.info(f"[SW Execute] inst={inst}, input_trans={input_trans}, output_trans={output_trans}")
+            return output_trans

@@ -33,10 +33,14 @@ class sub_one_model(BaseModel):
         while True:
             trans = await self.in_queue.get()
             self.log.info(f"[Model Input] len={trans.len}, fifo_read_data={trans.fifo_read_data}")
-            exp_fifo_write_data = trans.fifo_read_data-1
-            exp_trans = sub_one_output_trans(fifo_write_data=exp_fifo_write_data)
-            self.log.info(f"[Model Output] exp_fifo_write_data={exp_fifo_write_data}")
+            exp_trans = self.compute(trans)
+            self.log.info(f"[Model Output] exp_fifo_write_data={exp_trans.fifo_write_data}")
             self.exp_queue.put_nowait(exp_trans)
+    
+    def compute(self, input_trans: sub_one_input_trans) -> sub_one_output_trans:
+        exp_fifo_write_data = input_trans.fifo_read_data-1
+        exp_trans = sub_one_output_trans(fifo_write_data=exp_fifo_write_data)
+        return exp_trans
 
 class sub_one_driver(BaseDriver):
     def __init__(self, dut, name="sub_one_driver"):
@@ -119,10 +123,17 @@ class sub_one_cosim(CoSimBase):
     def __init__(self, dut, name="sub_one_cosim"):
         super().__init__(dut, sub_one_model, sub_one_driver, sub_one_input_monitor, sub_one_output_monitor, sub_one_scoreboard, name) 
     
-    async def execute(self, inst):
+    async def execute(self, inst, mode = "hw", input_trans = None):
         while True:
             await RisingEdge(self.dut.clk)
             if(self.dut.busy.value == 0):
                 break
-        await self.driver.run(inst)
-        self.executed_inst_num = self.executed_inst_num+1
+        if mode == "hw":
+            await self.driver.run(inst)
+            self.executed_inst_num = self.executed_inst_num+1
+        if mode == "sw":
+            self.executed_inst_num = self.executed_inst_num+1
+            self.scoreboard.match_count += 1
+            output_trans = self.model.compute(input_trans)
+            cocotb.log.info(f"[SW Execute] inst={inst}, input_trans ={input_trans}, output_trans={output_trans}")
+            return output_trans
