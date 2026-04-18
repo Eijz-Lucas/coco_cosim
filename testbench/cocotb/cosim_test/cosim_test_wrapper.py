@@ -57,6 +57,7 @@ class cosim_test_wrapper(CoSimWrapperBase):
         super().__init__(dut, modules, mode, name)
         self.ram = ram_model(1,16,1,dut.u_add_one.ram_addr,dut.u_add_one.ram_rdata)
         self.fifo = fifo_model(1,16,dut.clk,dut.u_sub_one.fifo_read_en, dut.u_sub_one.fifo_read_data, dut.u_add_one.fifo_write_en, dut.u_add_one.fifo_write_data, dut.u_sub_one.fifo_write_en, dut.u_sub_one.fifo_write_data)
+        cocotb.start_soon(self.backdoor_handler())
 
     async def execute(self, inst, mode):
         if(self.mode == "ut"):
@@ -89,3 +90,10 @@ class cosim_test_wrapper(CoSimWrapperBase):
             fifo_read_data = self.fifo.pop(length)
             input_trans = sub_one_input_trans(len=length, fifo_read_data=fifo_read_data)
             return input_trans
+
+    async def backdoor_handler(self):
+        while True:
+            await self.modules["add_one_cosim"].scoreboard.error.wait()
+            excepted_trans = await self.modules["add_one_cosim"].scoreboard.backdoor_queue.get()
+            self.fifo.write(0, excepted_trans.fifo_write_data.reshape(-1,1))
+            cocotb.log.info(f"[Backdoor Handler] Wrote expected fifo_write_data={excepted_trans.fifo_write_data} to fifo")

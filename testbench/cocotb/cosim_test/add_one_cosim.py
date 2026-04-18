@@ -46,7 +46,7 @@ class add_one_model(BaseModel):
         exp_ram_addr = []
         for i in range(input_trans.len):
             exp_ram_addr.append(input_trans.addr + i)
-        exp_fifo_write_data = input_trans.ram_rdata + 1
+        exp_fifo_write_data = input_trans.ram_rdata + 2
         exp_trans = add_one_output_trans(ram_addr=exp_ram_addr, fifo_write_data=exp_fifo_write_data)
         return exp_trans 
 
@@ -122,7 +122,9 @@ class add_one_input_monitor(BaseMonitor):
 class add_one_scoreboard(BaseScoreboard):
     def __init__(self, act_queue, exp_queue, name="add_one_scoreboard"):
         super().__init__(act_queue, exp_queue, name)
-        
+        self.error = Event()
+        self.backdoor_queue = Queue()
+
     async def run(self):
         while True:
             actual_trans = await self.act_queue.get()
@@ -138,11 +140,13 @@ class add_one_scoreboard(BaseScoreboard):
                 self.log.info(f"[Result] MATCH! match_count={self.match_count}")
             else:
                 self.error_count += 1
+                self.error.set()
+                self.backdoor_queue.put_nowait(expected_trans)
                 self.log.error(f"[Result] MISMATCH! error_count={self.error_count}")
                 if actual_trans.ram_addr != expected_trans.ram_addr:
                     self.log.error(f"  -> ram_addr mismatch: actual={actual_trans.ram_addr}, expected={expected_trans.ram_addr}")
                 if not np.array_equal(actual_trans.fifo_write_data, expected_trans.fifo_write_data):
-                    self.log.error(f"  -> fifo_data mismatch")
+                    self.log.error(f"  -> fifo_data mismatch")    
 
 class add_one_cosim(CoSimBase):
     def __init__(self, dut, name="add_one_cosim"):

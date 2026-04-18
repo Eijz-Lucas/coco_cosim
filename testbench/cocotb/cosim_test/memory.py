@@ -33,7 +33,32 @@ class FIFO:
             raise RuntimeError(f"FIFO has insufficient remaining space")
         else:
             self._q.extend(data)
+
+    def write(self, start: int, data: np.ndarray) -> None:
+        """
+        从指定位置批量写入，替换对应位置的数据
+        start: 起始索引
+        data: shape必须为 (n, size)
+        """
+        if data.ndim != 2 or data.shape[1] != self._size:
+            raise RuntimeError(f"data shape must be (n, {self._size}), got {data.shape}")
+        if start < 0 or start + data.shape[0] > len(self._q):
+            raise IndexError(f"range [{start}, {start+data.shape[0]}) out of range for FIFO of length {len(self._q)}")
+        for i, row in enumerate(data):
+            self._q[start + i] = row
     
+    def read(self, start: int, num: int) -> np.ndarray:
+        """
+        从指定位置批量读取，不改变队列状态
+        start: 起始索引
+        num: 读取行数
+        return: shape: (num, size)
+        """
+        if start < 0 or start + num > len(self._q):
+            raise IndexError(f"range [{start}, {start+num}) out of range for FIFO of length {len(self._q)}")
+        rows = [self._q[i] for i in range(start, start + num)]
+        return np.stack(rows, axis=0)
+
     def is_empty(self) -> bool:
         return len(self._q) == 0
     
