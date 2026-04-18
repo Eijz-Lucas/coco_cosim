@@ -14,6 +14,9 @@ VERILOG_SOURCES += $(shell ./utils/expand_list.sh ./simfile/$(SIM_TOP).f)
 
 # default args
 EXTRA_ARGS += --trace --trace-fst --trace-structs
+ifeq ($(ST),1)
+EXTRA_ARGS += +define+ST
+endif
 
 # COCOTB_TOPLEVEL is the name of the toplevel module in your Verilog or VHDL file
 COCOTB_TOPLEVEL = $(SIM_TOP)

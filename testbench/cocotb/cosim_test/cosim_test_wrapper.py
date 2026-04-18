@@ -76,8 +76,27 @@ class cosim_test_wrapper(CoSimWrapperBase):
                 cocotb.log.info(f"[Cosim Wrapper] Pushed output_trans.fifo_write_data={output_trans.fifo_write_data} to fifo")
             
         elif(self.mode == "st"):
-            pass
-        
+            await self.wait_compare()
+            if(inst["op"] == "add_one"):
+                dut = self.dut
+                dut.en_add.value = 1
+                dut.len_add.value = inst["len"]
+                dut.addr_add.value = inst["addr"]
+                await RisingEdge(dut.clk)
+                dut.en_add.value = 0
+                dut.len_add.value = 0
+                dut.addr_add.value = 0
+                self.modules["add_one_cosim"].executed_inst_num += 1
+            if(inst["op"] == "sub_one"):
+                dut = self.dut
+                await RisingEdge(dut.clk)
+                dut.en_sub.value = 1
+                dut.len_sub.value = inst["len"]
+                await RisingEdge(dut.clk)
+                dut.en_sub.value = 0
+                dut.len_sub.value = 0
+                self.modules["sub_one_cosim"].executed_inst_num += 1
+
     def decode(self, inst):
         if inst["op"] == "add_one":
             addr = inst["addr"]

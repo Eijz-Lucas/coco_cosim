@@ -31,9 +31,19 @@ async def test(dut):
     await RisingEdge(dut.clk)
     dut.rst_n.value = 1
 
+    # backdoor write success
+    dut.u_single_port_ram.mem[0].value = 10
+    dut.u_single_port_ram.mem[1].value = 20
+    dut.u_single_port_ram.mem[2].value = 30
+    dut.u_single_port_ram.mem[3].value = 40
+    dut.u_single_port_ram.mem[4].value = 50
+    cocotb.log.info(f"Initial RAM[0]: {dut.u_single_port_ram.mem[0].value}")
+    await RisingEdge(dut.clk)
+    cocotb.log.info(f"After reset RAM[0]: {dut.u_single_port_ram.mem[0].value}")
+
     # class init
     cosim_test_wrapper_modules = [("add_one_cosim", add_one_cosim, dut.u_add_one), ("sub_one_cosim", sub_one_cosim, dut.u_sub_one)]
-    cosim_test_wrapper_instance = cosim_test_wrapper(dut, cosim_test_wrapper_modules, "ut")
+    cosim_test_wrapper_instance = cosim_test_wrapper(dut, cosim_test_wrapper_modules, "st")
     sys_ctrl_instance = sys_ctrl(cosim_test_wrapper_instance, firmware)
     # sim
     await sys_ctrl_instance.execute()

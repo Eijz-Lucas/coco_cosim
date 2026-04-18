@@ -21,6 +21,8 @@ CORNER =
 COV  = on
 DUMP = on
 SIMMODE = RTL
+ST = 
+
 # SIM_TOP ?= simfile_rtl
 # SIM_TOOL ?= verilator
 # EXTRA_ARGS += --coverage
@@ -97,7 +99,7 @@ vcs-%:
 ctb-%:
 	$(eval SIM_TOP := $*)
 	@echo "======= cocotb SIM_TOP = $(SIM_TOP) ======="
-	$(MAKE) -f testbench/cocotb/ctb.mk SIM_TOP=$(SIM_TOP)
+	$(MAKE) -f testbench/cocotb/ctb.mk SIM_TOP=$(SIM_TOP) ST=$(ST)
 
 
 uvm:

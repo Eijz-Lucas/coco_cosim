@@ -10,8 +10,7 @@ module single_port_ram #(
 );
 
     // RAM 存储体
-    logic [DATA_WIDTH-1:0] mem[0:(1<<ADDR_WIDTH)-1];
-
+    logic [DATA_WIDTH-1:0] mem[0:(1<<ADDR_WIDTH)-1]/* verilator public_flat_rw */;
     // 同步写
     always_ff @(posedge clk) begin
         if (we) begin
