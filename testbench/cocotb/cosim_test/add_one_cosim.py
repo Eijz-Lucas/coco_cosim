@@ -1,8 +1,9 @@
 from .base import *
 import cocotb
 import numpy as np
-from cocotb.triggers import RisingEdge, ValueChange, Timer, Event
+from cocotb.triggers import RisingEdge, ValueChange, Timer, Event, ReadOnly
 from cocotb.clock import Clock
+from cocotb.handle import Force, Release, Freeze
 
 @dataclass
 class add_one_input_trans(BaseTransaction):
@@ -53,13 +54,13 @@ class add_one_driver(BaseDriver):
         self.log.info(f"[Driver] inst={inst}")
         if inst["op"] == "add_one":
             dut = self.dut
-            dut.en_add.value = 1
-            dut.len_add.value = inst["len"]
-            dut.addr_add.value = inst["addr"]
+            dut.en.value = 1
+            dut.len.value = inst["len"]
+            dut.addr.value = inst["addr"]
             await RisingEdge(dut.clk)
-            dut.en_add.value = 0
-            dut.len_add.value = 0
-            dut.addr_add.value = 0
+            dut.en.value = 0
+            dut.len.value = 0
+            dut.addr.value = 0
 
 class add_one_output_monitor(BaseMonitor):
     def __init__(self, dut, act_queue, name="add_one_output_monitor"):
@@ -70,10 +71,11 @@ class add_one_output_monitor(BaseMonitor):
         ram_addr_list = [] 
         while True:
             await RisingEdge(self.dut.clk) 
-            if self.dut.u_add_one.busy.value == 1:
-                ram_addr_list.append(int(self.dut.ram_addr_add.value))
-            if self.dut.u_add_one.fifo_write_en.value == 1:
-                data = int(self.dut.u_add_one.fifo_write_data.value)
+            await ReadOnly()
+            if self.dut.busy.value == 1:
+                ram_addr_list.append(int(self.dut.ram_addr.value))
+            if self.dut.fifo_write_en.value == 1:
+                data = int(self.dut.fifo_write_data.value)
                 data_list.append(data)
             else:
                 if len(data_list) > 0:
@@ -98,11 +100,12 @@ class add_one_input_monitor(BaseMonitor):
         data_list = []
         while True:
             await RisingEdge(self.dut.clk)
-            if self.dut.en_add.value == 1: 
-                addr = int(self.dut.addr_add.value)
-                length = int(self.dut.len_add.value)
-            if self.dut.u_add_one.busy.value == 1:
-                data_list.append(int(self.dut.u_add_one.ram_rdata.value)) 
+            await ReadOnly()
+            if self.dut.en.value == 1: 
+                addr = int(self.dut.addr.value)
+                length = int(self.dut.len.value)
+            if self.dut.busy.value == 1:
+                data_list.append(int(self.dut.ram_rdata.value)) 
             else:
                 if len(data_list) > 0:
                     data_list.pop()
@@ -115,11 +118,6 @@ class add_one_input_monitor(BaseMonitor):
 class add_one_scoreboard(BaseScoreboard):
     def __init__(self, act_queue, exp_queue, name="add_one_scoreboard"):
         super().__init__(act_queue, exp_queue, name)
-        self.match_count = 0
-        self.error_count = 0 
-        self.exp_total_inst_num = None
-        self.drive_done = Event()
-        self.compare_done = Event()
         
     async def run(self):
         while True:
@@ -142,34 +140,14 @@ class add_one_scoreboard(BaseScoreboard):
                 if not np.array_equal(actual_trans.fifo_write_data, expected_trans.fifo_write_data):
                     self.log.error(f"  -> fifo_data mismatch")
 
-            if self.drive_done.is_set() == True and self.match_count+self.error_count == self.exp_total_inst_num:
-                self.compare_done.set()
-    
-    def set_drive_done(self, exp_total_inst_num):
-        self.exp_total_inst_num = exp_total_inst_num
-        self.drive_done.set() 
-
 class add_one_cosim(CoSimBase):
-    def __init__(self, dut):
-        super().__init__(dut, add_one_model, add_one_driver, add_one_input_monitor, add_one_output_monitor, add_one_scoreboard, "add_one_cosim") 
-        self.total_inst_num = 0
+    def __init__(self, dut, name="add_one_cosim"):
+        super().__init__(dut, add_one_model, add_one_driver, add_one_input_monitor, add_one_output_monitor, add_one_scoreboard, name) 
     
     async def execute(self, inst):
         while True:
             await RisingEdge(self.dut.clk)
-            # await Timer(1, unit="ns")
-            if(self.dut.u_add_one.busy.value == 0):
+            if(self.dut.busy.value == 0):
                 break
         await self.driver.run(inst)
-        self.total_inst_num = self.total_inst_num+1
-    
-    def set_drive_done(self):
-        self.scoreboard.set_drive_done(self.total_inst_num)
-    
-    def clear_done(self):
-        self.total_inst_num = 0
-        self.scoreboard.drive_done.clear()
-        self.scoreboard.compare_done.clear()
-
-    async def wait_compare(self):
-        await self.scoreboard.compare_done.wait()
+        self.executed_inst_num = self.executed_inst_num+1

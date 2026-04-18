@@ -1,9 +1,10 @@
 from .base import *
 import cocotb
 import numpy as np
-from cocotb.triggers import RisingEdge, ValueChange, Event
+from cocotb.triggers import RisingEdge, ValueChange, Event, ReadOnly
 from cocotb.clock import Clock
 
+@dataclass
 class sub_one_input_trans(BaseTransaction):
     len:int
     fifo_read_data:np.array
@@ -15,6 +16,7 @@ class sub_one_input_trans(BaseTransaction):
             return False
         return np.array_equal(self.fifo_read_data, other.fifo_read_data)
 
+@dataclass
 class sub_one_output_trans(BaseTransaction):
     fifo_write_data:np.array
 
@@ -44,11 +46,12 @@ class sub_one_driver(BaseDriver):
         self.log.info(f"[Driver] inst={inst}")
         if inst["op"] == "sub_one":
             dut = self.dut
-            dut.en_sub.value = 1
-            dut.len_sub.value = inst["len"]
             await RisingEdge(dut.clk)
-            dut.en_sub.value = 0
-            dut.len_sub.value = 0
+            dut.en.value = 1
+            dut.len.value = inst["len"]
+            await RisingEdge(dut.clk)
+            dut.en.value = 0
+            dut.len.value = 0
             
 class sub_one_output_monitor(BaseMonitor):
     def __init__(self, dut, act_queue, name="sub_one_output_monitor"):
@@ -58,8 +61,8 @@ class sub_one_output_monitor(BaseMonitor):
         data_list = []
         while True:
             await RisingEdge(self.dut.clk)
-            if self.dut.u_sub_one.fifo_write_en.value == 1:
-                data = int(self.dut.u_sub_one.fifo_write_data.value)
+            if self.dut.fifo_write_en.value == 1:
+                data = int(self.dut.fifo_write_data.value)
                 data_list.append(data)
             else:
                 if len(data_list) > 0:
@@ -77,10 +80,14 @@ class sub_one_input_monitor(BaseMonitor):
         data_list = []
         while True:
             await RisingEdge(self.dut.clk)
-            if self.dut.en_sub.value == 1: 
-                length = int(self.dut.len_sub.value)
-            if self.dut.u_sub_one.fifo_read_en.value == 1:
-                data_list.append(int(self.dut.u_sub_one.fifo_read_data.value)) 
+            await ReadOnly() #TODO??????????
+            if self.dut.en.value == 1: 
+                length = int(self.dut.len.value)
+                # cocotb.log.info(f"get en========")
+            if self.dut.fifo_read_en.value == 1:
+                # cocotb.log.info(f"busy {self.dut.busy.value}")
+                data_list.append(int(self.dut.fifo_read_data.value)) 
+                # cocotb.log.info(f"read data{data_list}")
             else:
                 if len(data_list) > 0:
                     fifo_read_data=np.array(data_list)
@@ -92,14 +99,9 @@ class sub_one_input_monitor(BaseMonitor):
 class sub_one_scoreboard(BaseScoreboard):
     def __init__(self, act_queue, exp_queue, name="sub_one_scoreboard"):
         super().__init__(act_queue, exp_queue, name)
-        self.match_count = 0
-        self.error_count = 0 
-        self.exp_total_inst_num = None
         
     async def run(self):
         while True:
-            # if self.drive_done.is_set() == True and self.match_count+self.error_count == self.exp_total_inst_num:
-            #     self.compare_done.set()
             actual_trans = await self.act_queue.get()
             expected_trans = await self.exp_queue.get()
 
@@ -113,47 +115,14 @@ class sub_one_scoreboard(BaseScoreboard):
                 self.error_count += 1
                 self.log.error(f"[Result] MISMATCH! error_count={self.error_count}")
     
-    async def wait_compare_done(self):
-        while True:
-            if self.drive_done.is_set() == True and self.match_count+self.error_count == self.exp_total_inst_num:
-                self.compare_done.set()
-                await RisingEdge(self.clk_sig)
-            else:
-                await RisingEdge(self.clk_sig)
-
-    def set_drive_done(self, exp_total_inst_num):
-        self.exp_total_inst_num = exp_total_inst_num
-        self.drive_done.set() 
-
 class sub_one_cosim(CoSimBase):
-    def __init__(self, dut):
-        super().__init__(dut, sub_one_model, sub_one_driver, sub_one_input_monitor, sub_one_output_monitor, sub_one_scoreboard) 
-        self.drive_done = Event()
-        self.compare_done = Event()
-        self.total_inst_num = 0
+    def __init__(self, dut, name="sub_one_cosim"):
+        super().__init__(dut, sub_one_model, sub_one_driver, sub_one_input_monitor, sub_one_output_monitor, sub_one_scoreboard, name) 
     
     async def execute(self, inst):
         while True:
             await RisingEdge(self.dut.clk)
-            # await Timer(1, unit="ns")
-            if(self.dut.u_sub_one.busy.value == 0):
+            if(self.dut.busy.value == 0):
                 break
         await self.driver.run(inst)
-        self.total_inst_num = self.total_inst_num+1
-    
-    def set_drive_done(self):
-        breakpoint()
-        self.drive_done.set()
-    
-    def clear_done(self):
-        self.total_inst_num = 0
-        self.drive_done.clear()
-        self.compare_done.clear()
-
-    async def wait_compare(self):
-        while True:
-            breakpoint()
-            if self.drive_done.is_set() == True and self.scoreboard.match_count + self.scoreboard.error_count == self.total_inst_num:
-                break
-            else:
-                await RisingEdge(self.dut.clk)
+        self.executed_inst_num = self.executed_inst_num+1
