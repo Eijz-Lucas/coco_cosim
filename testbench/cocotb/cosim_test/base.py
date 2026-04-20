@@ -137,6 +137,7 @@ class CoSimWrapperBase(ABC):
         self.dut = dut
         self.mode = mode
         self.name = name
+        self.log = logging.getLogger(f"cocotb.{name}")
         self.modules: Dict[str, Any] = {}
         for module in modules:
             name, cls, handle = module[0], module[1], module[2]

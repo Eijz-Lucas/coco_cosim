@@ -73,7 +73,7 @@ class cosim_test_wrapper(CoSimWrapperBase):
             output_trans = await self.modules[module].execute(inst, mode, input_trans)
             if output_trans is not None:
                 self.fifo.push(output_trans.fifo_write_data)
-                cocotb.log.info(f"[Cosim Wrapper] Pushed output_trans.fifo_write_data={output_trans.fifo_write_data} to fifo")
+                self.log.info(f"[Cosim Wrapper] Pushed output_trans.fifo_write_data={output_trans.fifo_write_data} to fifo")
             
         elif(self.mode == "st"):
             await self.wait_compare()
@@ -115,4 +115,4 @@ class cosim_test_wrapper(CoSimWrapperBase):
             await self.modules["add_one_cosim"].scoreboard.error.wait()
             excepted_trans = await self.modules["add_one_cosim"].scoreboard.backdoor_queue.get()
             self.fifo.write(0, excepted_trans.fifo_write_data.reshape(-1,1))
-            cocotb.log.info(f"[Backdoor Handler] Wrote expected fifo_write_data={excepted_trans.fifo_write_data} to fifo")
+            self.log.info(f"[Backdoor Handler] Wrote expected fifo_write_data={excepted_trans.fifo_write_data} to fifo")

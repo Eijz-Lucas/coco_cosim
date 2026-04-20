@@ -135,5 +135,5 @@ class sub_one_cosim(CoSimBase):
             self.executed_inst_num = self.executed_inst_num+1
             self.scoreboard.match_count += 1
             output_trans = self.model.compute(input_trans)
-            cocotb.log.info(f"[SW Execute] inst={inst}, input_trans ={input_trans}, output_trans={output_trans}")
+            self.log.info(f"[SW Execute] inst={inst}, input_trans ={input_trans}, output_trans={output_trans}")
             return output_trans
