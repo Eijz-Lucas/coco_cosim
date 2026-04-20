@@ -283,6 +283,12 @@ clean_nlint:
 .PHONY: clean_all
 clean_all: clean_dc clean_nlint clean_sim
 
+clean_build-%:
+	$(eval BUILD := $*)
+	@echo "======= clean BUILD = $(BUILD) ======="
+	-rm -rf ./builds/sim_build_$(BUILD)
+	-rm -rf ./builds/results_$(BUILD).xml
+
 .PHONY: clearprj
 clearprj:
 	mkdir ../makefile_save
