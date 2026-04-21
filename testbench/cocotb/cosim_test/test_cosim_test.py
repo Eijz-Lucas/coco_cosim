@@ -25,9 +25,9 @@ firmware = [
 ]
 
 logging.basicConfig(
-    filename='cosim.log',          # 指定输出文件名
-    filemode='w',                # 'a' 为追加模式，'w' 为覆盖模式
-    level=logging.INFO,          # 设置最低捕获级别
+    filename='cosim.log',
+    filemode='w',
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s' # 日志格式
 )
 
@@ -51,7 +51,7 @@ async def test(dut):
         dut.u_single_port_ram.mem[4].value = 50
         cocotb.log.info(f"Initial RAM[0]: {dut.u_single_port_ram.mem[0].value}")
         await RisingEdge(dut.clk)
-        cocotb.log.info(f"After reset RAM[0]: {dut.u_single_port_ram.mem[0].value}")
+        cocotb.log.info(f"After one cycle RAM[0]: {dut.u_single_port_ram.mem[0].value}")
 
     # class init
     cosim_test_wrapper_modules = [("add_one_cosim", add_one_cosim, dut.u_add_one), ("sub_one_cosim", sub_one_cosim, dut.u_sub_one)]

@@ -13,9 +13,6 @@ class ram_model(RAM):
     async def run(self):
         if 'X' in str(self.addr_sig.value):
             self.rdata_sig.value = 0
-        else:
-            # data = self.read(0,int(self.addr_sig.value),1)
-            self.rdata_sig.value = int(self.read(0,int(self.addr_sig.value),1)[0][0])
         while True:
             await ValueChange(self.addr_sig)
             self.rdata_sig.value = int(self.read(0,int(self.addr_sig.value),1)[0][0])
