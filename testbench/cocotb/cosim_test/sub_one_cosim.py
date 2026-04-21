@@ -1,13 +1,23 @@
 from .base import *
 import cocotb
 import numpy as np
-from cocotb.triggers import RisingEdge, ValueChange, Event, ReadOnly
+from cocotb.triggers import RisingEdge, ValueChange, Event, ReadOnly, Timer
 from cocotb.clock import Clock
+from cocotb.utils import get_sim_time
+from cocotb.handle import Immediate
 
 @dataclass
 class sub_one_input_trans(BaseTransaction):
     len:int
     fifo_read_data:np.array
+
+    def clear(self):
+        self.len = 0
+        self.fifo_read_data = np.array([])
+    
+    @classmethod
+    def empty(cls):
+        return cls(len=0, fifo_read_data=np.array([]))
 
     def __eq__(self, other):
         if not isinstance(other, sub_one_input_trans):
@@ -19,6 +29,13 @@ class sub_one_input_trans(BaseTransaction):
 @dataclass
 class sub_one_output_trans(BaseTransaction):
     fifo_write_data:np.array
+
+    def clear(self):
+        self.fifo_write_data = np.array([])
+    
+    @classmethod
+    def empty(cls):
+        return cls(fifo_write_data=np.array([]))
 
     def __eq__(self, other):
         if not isinstance(other, sub_one_output_trans):
@@ -60,45 +77,40 @@ class sub_one_driver(BaseDriver):
 class sub_one_output_monitor(BaseMonitor):
     def __init__(self, dut, act_queue, name="sub_one_output_monitor"):
         super().__init__(dut, act_queue, name)
-
+        self.output_trans = sub_one_output_trans.empty()
+    
+    @always_sample_next()
     async def run(self):
-        data_list = []
-        while True:
-            await RisingEdge(self.dut.clk)
             if self.dut.fifo_write_en.value == 1:
                 data = int(self.dut.fifo_write_data.value)
-                data_list.append(data)
+                self.output_trans.fifo_write_data = np.append(self.output_trans.fifo_write_data, data)
             else:
-                if len(data_list) > 0:
-                    fifo_write_data = np.array(data_list)
+                if len(self.output_trans.fifo_write_data) > 0:
+                    fifo_write_data = np.array(self.output_trans.fifo_write_data)
                     output_trans = sub_one_output_trans(fifo_write_data=fifo_write_data)
                     self.queue.put_nowait(output_trans)
                     self.log.info(f"[Output Monitor PUT] fifo_write_data={fifo_write_data}")
-                    data_list.clear()
+                    self.output_trans.clear()
                     
 class sub_one_input_monitor(BaseMonitor):
     def __init__(self, dut, in_queue, name="sub_one_input_monitor"):
         super().__init__(dut, in_queue, name)
+        self.input_trans = sub_one_input_trans.empty()
     
+    @always_sample_next()
     async def run(self):
-        data_list = []
-        while True:
-            await RisingEdge(self.dut.clk)
-            await ReadOnly() #TODO??????????
-            if self.dut.en.value == 1: 
-                length = int(self.dut.len.value)
-                # cocotb.log.info(f"get en========")
-            if self.dut.fifo_read_en.value == 1:
-                # cocotb.log.info(f"busy {self.dut.busy.value}")
-                data_list.append(int(self.dut.fifo_read_data.value)) 
-                # cocotb.log.info(f"read data{data_list}")
-            else:
-                if len(data_list) > 0:
-                    fifo_read_data=np.array(data_list)
-                    trans = sub_one_input_trans(len=length, fifo_read_data=fifo_read_data)
-                    self.log.info(f"[Input Monitor PUT] len={length}, ram_rdata={fifo_read_data}")
-                    self.queue.put_nowait(trans)
-                    data_list.clear()
+        if self.dut.en.value == 1: 
+            self.input_trans.len = int(self.dut.len.value)
+        if self.dut.fifo_read_en.value == 1:
+            self.input_trans.fifo_read_data = np.append(self.input_trans.fifo_read_data, int(self.dut.fifo_read_data.value))
+            self.log.info(f"read data{self.input_trans.fifo_read_data}")
+        else:
+            if len(self.input_trans.fifo_read_data) > 0:
+                fifo_read_data=np.array(self.input_trans.fifo_read_data)
+                trans = sub_one_input_trans(len=self.input_trans.len, fifo_read_data=fifo_read_data)
+                self.log.info(f"[Input Monitor PUT] len={self.input_trans.len}, ram_rdata={fifo_read_data}")
+                self.queue.put_nowait(trans)
+                self.input_trans.clear()
                     
 class sub_one_scoreboard(BaseScoreboard):
     def __init__(self, act_queue, exp_queue, name="sub_one_scoreboard"):

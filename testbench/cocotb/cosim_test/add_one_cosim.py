@@ -10,6 +10,15 @@ class add_one_input_trans(BaseTransaction):
     addr:int
     len:int
     ram_rdata:np.ndarray
+    
+    def clear(self):
+        self.addr = 0
+        self.len = 0
+        self.ram_rdata = np.array([])
+
+    @classmethod
+    def empty(cls):
+        return cls(addr=0, len=0, ram_rdata=np.array([]))
 
     def __eq__(self, other):
         if not isinstance(other, add_one_input_trans):
@@ -22,6 +31,14 @@ class add_one_input_trans(BaseTransaction):
 class add_one_output_trans(BaseTransaction):
     ram_addr:list
     fifo_write_data:np.ndarray
+
+    def clear(self):
+        self.ram_addr = []
+        self.fifo_write_data = np.array([])
+
+    @classmethod
+    def empty(cls):
+        return cls(ram_addr=[], fifo_write_data=np.array([]))
 
     def __eq__(self, other):
         if not isinstance(other, add_one_output_trans):
@@ -46,7 +63,7 @@ class add_one_model(BaseModel):
         exp_ram_addr = []
         for i in range(input_trans.len):
             exp_ram_addr.append(input_trans.addr + i)
-        exp_fifo_write_data = input_trans.ram_rdata + 2
+        exp_fifo_write_data = input_trans.ram_rdata + 1
         exp_trans = add_one_output_trans(ram_addr=exp_ram_addr, fifo_write_data=exp_fifo_write_data)
         return exp_trans 
 
@@ -69,55 +86,39 @@ class add_one_driver(BaseDriver):
 class add_one_output_monitor(BaseMonitor):
     def __init__(self, dut, act_queue, name="add_one_output_monitor"):
         super().__init__(dut, act_queue, name)
+        self.output_trans = add_one_output_trans.empty()
 
+    @always_sample_next()
     async def run(self):
-        data_list = [] 
-        ram_addr_list = [] 
-        while True:
-            await RisingEdge(self.dut.clk) 
-            await ReadOnly()
-            if self.dut.busy.value == 1:
-                ram_addr_list.append(int(self.dut.ram_addr.value))
-            if self.dut.fifo_write_en.value == 1:
-                data = int(self.dut.fifo_write_data.value)
-                data_list.append(data)
-            else:
-                if len(data_list) > 0:
-                    ram_addr_list.pop()
-                    fifo_write_data = np.array(data_list)
-                    output_trans = add_one_output_trans(ram_addr = ram_addr_list.copy(), fifo_write_data=fifo_write_data)
-                    self.queue.put_nowait(output_trans)
-                    self.log.info(f"[Output Monitor PUT] ram_addr={ram_addr_list.copy()}, fifo_write_data={fifo_write_data}")
-                    # import debugpy
-                    # # 监听 5678 端口（你可以换成任意空闲端口）
-                    # debugpy.listen(("0.0.0.0", 5679)) 
-                    # # 程序会在这里完全冻结，直到你在 VS Code 里点击连接
-                    # debugpy.wait_for_client() 
-                    data_list.clear()
-                    ram_addr_list.clear()
+        if self.dut.busy.value == 1:
+            self.output_trans.ram_addr.append(int(self.dut.ram_addr.value))
+        if self.dut.fifo_write_en.value == 1:
+            data = int(self.dut.fifo_write_data.value)
+            self.output_trans.fifo_write_data = np.append(self.output_trans.fifo_write_data, data)
+        else:
+            if len(self.output_trans.fifo_write_data) > 0:
+                self.output_trans.clear()
+                self.queue.put_nowait(self.output_trans)
+                self.log.info(f"[Output Monitor PUT] ram_addr={self.output_trans.ram_addr}, fifo_write_data={self.output_trans.fifo_write_data}")
 
 class add_one_input_monitor(BaseMonitor):
     def __init__(self, dut, in_queue, name="add_one_input_monitor"):
         super().__init__(dut, in_queue, name)
+        self.input_trans = add_one_input_trans.empty()
     
+    @always_sample_next()
     async def run(self):
-        data_list = []
-        while True:
-            await RisingEdge(self.dut.clk)
-            await ReadOnly()
-            if self.dut.en.value == 1: 
-                addr = int(self.dut.addr.value)
-                length = int(self.dut.len.value)
-            if self.dut.busy.value == 1:
-                data_list.append(int(self.dut.ram_rdata.value)) 
-            else:
-                if len(data_list) > 0:
-                    data_list.pop()
-                    ram_rdata=np.array(data_list)
-                    trans = add_one_input_trans(addr=addr, len=length, ram_rdata=ram_rdata)
-                    self.log.info(f"[Input Monitor PUT] addr={addr}, len={length}, ram_rdata={ram_rdata}")
-                    self.queue.put_nowait(trans)
-                    data_list.clear()
+        if self.dut.en.value == 1: 
+            self.input_trans.addr = int(self.dut.addr.value)
+            self.input_trans.len = int(self.dut.len.value)
+        if self.dut.busy.value == 1:
+            self.input_trans.ram_rdata = np.append(self.input_trans.ram_rdata, int(self.dut.ram_rdata.value))
+        else:
+            if len(self.input_trans.ram_rdata) > 0:
+                self.input_trans.clear()
+                self.queue.put_nowait(self.input_trans)
+                self.log.info(f"[Input Monitor PUT] addr={self.input_trans.addr}, len={self.input_trans.len}, ram_rdata={self.input_trans.ram_rdata}")
+                self.input_trans = add_one_input_trans.empty()
 
 class add_one_scoreboard(BaseScoreboard):
     def __init__(self, act_queue, exp_queue, name="add_one_scoreboard"):
