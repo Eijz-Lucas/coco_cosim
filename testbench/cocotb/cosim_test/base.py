@@ -83,7 +83,14 @@ class BaseModel(ABC):
                 return trans.data + 1
     """
 
-    def __init__(self, in_queue: Queue, exp_queue: Queue, name: str = "SwModel") -> None:
+    def __init__(
+        self,
+        in_queue: Queue,
+        exp_queue: Queue,
+        name: str = "SwModel",
+        *args: Any,
+        **kwargs: Any
+    ) -> None:
         """
         Initialize the reference model.
 
@@ -96,10 +103,9 @@ class BaseModel(ABC):
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
         self.in_queue: Queue = in_queue
         self.exp_queue: Queue = exp_queue
-        cocotb.start_soon(self.run())
+        cocotb.start_soon(self.run(*args, **kwargs))
         self.log.info(f"======== {self.name} Initiated ========")
 
-    @abstractmethod
     async def run(self, *args: Any, **kwargs: Any) -> None:
         """
         Main coroutine for the model.
@@ -114,7 +120,12 @@ class BaseModel(ABC):
                     result = self.compute(trans)
                     await self.exp_queue.put(result)
         """
-        pass
+        while True:
+            in_trans = await self.in_queue.get()
+            self.log.info(f"[{self.name} Input] {in_trans}")
+            exp_trans = self.compute(in_trans, *args, **kwargs)
+            self.log.info(f"[{self.name} Output] {exp_trans}")
+            self.exp_queue.put_nowait(exp_trans)
 
     @abstractmethod
     def compute(self, *args: Any, **kwargs: Any) -> Any:
@@ -157,7 +168,13 @@ class BaseDriver(ABC):
                 self.dut.valid.value = 0
     """
 
-    def __init__(self, dut: HierarchyObject, name: str = "Driver") -> None:
+    def __init__(
+        self,
+        dut: HierarchyObject,
+        name: str = "Driver",
+        *args,
+        **kwargs
+    ) -> None:
         """
         Initialize the driver.
 
@@ -184,8 +201,37 @@ class BaseDriver(ABC):
                 self.dut.valid.value = 1
                 await RisingEdge(self.dut.clk)
         """
-        self.log.info(f"{self.name} start")
         pass
+
+
+def always_sample_next(time: int = 10, unit: str = "ns"):
+    """
+    Decorator to continuously sample signals on each clock edge.
+
+    This decorator creates an infinite loop that samples signals
+    on every clock edge after a specified delay.
+
+    Args:
+        time (int): Delay time before sampling (default: 10)
+        unit (str): Time unit (default: 'ns')
+
+    Returns:
+        Decorator function
+
+    Usage:
+        @always_sample_next(time=5, unit='ns')
+        async def monitor_signals(self):
+            self.log.info(f"Data: {self.dut.data.value}")
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            while True:
+                await Timer(time, unit=unit)
+                await func(*args, **kwargs)
+                await RisingEdge(args[0].dut.clk)
+        return wrapper
+    return decorator
 
 
 class BaseMonitor(ABC):
@@ -215,7 +261,16 @@ class BaseMonitor(ABC):
                         await self.queue.put(trans)
     """
 
-    def __init__(self, dut: HierarchyObject, queue: Queue, name: str = "Monitor") -> None:
+    def __init__(
+        self,
+        dut: HierarchyObject,
+        queue: Queue,
+        name: str = "Monitor",
+        clk_period: int = 10,
+        unit: str = "ns",
+        *args: Any,
+        **kwargs: Any
+    ) -> None:
         """
         Initialize the monitor.
 
@@ -228,25 +283,18 @@ class BaseMonitor(ABC):
         self.dut: HierarchyObject = dut
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
         self.queue: Queue = queue
-        cocotb.start_soon(self.run())
+        self.clk_period: int = clk_period
+        self.unit: str = unit
+        cocotb.start_soon(self.run(*args, **kwargs))
         self.log.info(f"======== {self.name} Initiated ========")
 
-    @abstractmethod
     async def run(self, *args: Any, **kwargs: Any) -> None:
-        """
-        Main monitor coroutine.
+        decorator = always_sample_next(time=self.clk_period, unit=self.unit)
+        always_sample = decorator(self.sample)
+        await always_sample(self, *args, **kwargs)
 
-        Continuously monitors DUT signals and captures transactions.
-        Must be implemented by subclass.
-
-        Example:
-            async def run(self):
-                while True:
-                    await RisingEdge(self.dut.clk)
-                    if self.dut.valid.value:
-                        trans = self.capture()
-                        await self.queue.put(trans)
-        """
+    @abstractmethod
+    async def sample(self, *args: Any, **kwargs: Any) -> None:
         pass
 
 
@@ -285,7 +333,9 @@ class BaseScoreboard(ABC):
         self,
         act_queue: Queue,
         exp_queue: Queue,
-        name: str = "Scoreboard"
+        name: str = "Scoreboard",
+        *args: Any,
+        **kwargs: Any
     ) -> None:
         """
         Initialize the scoreboard.
@@ -301,10 +351,9 @@ class BaseScoreboard(ABC):
         self.act_queue: Queue = act_queue
         self.match_count: int = 0
         self.error_count: int = 0
-        cocotb.start_soon(self.run())
+        cocotb.start_soon(self.run(*args, **kwargs))
         self.log.info(f"======== {self.name} Initiated ========")
 
-    @abstractmethod
     async def run(self, *args: Any, **kwargs: Any) -> None:
         """
         Main scoreboard comparison coroutine.
@@ -322,7 +371,26 @@ class BaseScoreboard(ABC):
                     else:
                         self.error_count += 1
         """
-        pass
+        while True:
+            act_trans = await self.act_queue.get()
+            exp_trans = await self.exp_queue.get()
+
+            self.log.info(f"[{self.name} get Actual Trans] {act_trans}")
+            self.log.info(f"[{self.name} get Expected Trans] {exp_trans}")
+            self.compare(*args, **kwargs)
+
+    def compare(self, *args, **kwargs) -> bool:
+        if self.act_trans == self.exp_trans:
+            self.match_count += 1
+            self.log.info(
+                f"[{self.name}] MATCH! match_count={self.match_count}")
+            return True
+        else:
+            self.error_count += 1
+            self.log.error(
+                f"[Result] MISMATCH! error_count={self.error_count}")
+            return False
+
 
 def always_sample_next(time: int = 10, unit: str = 'ns'):
     """
@@ -403,6 +471,8 @@ class CoSimBase(ABC):
         output_monitor: Type[BaseMonitor],
         scoreboard: Type[BaseScoreboard],
         name: str = "CoSimBase",
+        mode: str = "hw",
+        level: str = "ut",
         *args: Any,
         **kwargs: Any
     ) -> None:
@@ -421,6 +491,19 @@ class CoSimBase(ABC):
             **kwargs: Additional keyword arguments
         """
         self.name: str = name
+        if mode not in ("hw", "sw"):
+            raise ValueError(
+                f"Invalid mode: {mode} for {self.name}. Must be 'hw' or 'sw'."
+            )
+        else:
+            self.mode: str = mode
+        if level not in ("ut", "st"):
+            raise ValueError(
+                f"Invalid level: {level} for {
+                    self.name}. Must be 'ut' or 'st'."
+            )
+        else:
+            self.level: str = level
         self.dut: HierarchyObject = dut
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
         self.in_queue: Queue = Queue()
@@ -432,10 +515,17 @@ class CoSimBase(ABC):
         self.output_monitor: BaseMonitor = output_monitor(self.dut, self.act_queue)
         self.scoreboard: BaseScoreboard = scoreboard(self.act_queue, self.exp_queue)
         self.executed_inst_num: int = 0
-        self.log.info(f"======== {self.name} Initiated ========")
+        self.log.info(f"******** {self.name} Initiated ********")
+
+    async def execute(self, *args: Any, **
+                      kwargs: Any) -> Optional[BaseTransaction]:
+        if self.level == "ut":
+            await self.execute_unit_test(*args, **kwargs)
+        elif self.level == "st":
+            await self.execute_system_test(*args, **kwargs)
 
     @abstractmethod
-    async def execute(self, *args: Any, **kwargs: Any) -> None:
+    async def execute_unit_test(self, *args: Any, **kwargs: Any) -> Optional[BaseTransaction]:
         """
         Execute a test operation.
 
@@ -446,6 +536,22 @@ class CoSimBase(ABC):
             async def execute(self, data: int):
                 self.executed_inst_num += 1
                 await self.driver.run(data)
+        """
+        pass
+
+    @abstractmethod
+    async def execute_system_test(self, *args: Any, **kwargs: Any) -> Optional[BaseTransaction]:
+        """
+        Execute a system-level test operation.
+
+        Must be implemented by subclass to define how to drive inputs
+        for system-level verification.
+
+        Example:
+            async def execute_system_test(self, inst: dict):
+                op = inst["op"]
+                if op == "add_one":
+                    await self.modules["add_one"].execute(inst)
         """
         pass
 
@@ -508,9 +614,10 @@ class CoSimWrapperBase(ABC):
     def __init__(
         self,
         dut: HierarchyObject,
-        modules: List[Tuple[str, Type, HierarchyObject, Optional[Tuple], Optional[Dict]]],
+        modules: List[str, Type, HierarchyObject, Optional[Dict]],
         mode: str,
         name: str = "CosimWrapperBase",
+        level: str = "ut",
         *args: Any,
         **kwargs: Any
     ) -> None:
@@ -535,15 +642,23 @@ class CoSimWrapperBase(ABC):
         self.name: str = name
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
         self.modules: Dict[str, Any] = {}
-
+        if level not in ("ut", "st"):
+            raise ValueError(
+                f"Invalid level: {level} for {
+                    self.name}. Must be 'ut' or 'st'."
+            )
+        else:
+            self.level: str = level
         for module in modules:
-            name, cls, handle = module[0], module[1], module[2]
-            mod_args = module[3] if len(module) > 3 else ()
-            mod_kwargs = module[4] if len(module) > 4 else {}
-            self.modules[name] = cls(handle, *mod_args, **mod_kwargs)
+            name, cls, handle, cfg = module[0], module[1], module[2], module[3]
+            self.modules[name] = cls(handle, *args, **cfg, **kwargs)
+        if self.level == "st":
+            for module in self.modules.values():
+                if isinstance(module, CoSimBase):
+                    if module.mode == "sw":
+                        raise RuntimeError(f"{module}'s mode is sw in {self.name} system test")
 
-    @abstractmethod
-    async def execute(self, inst: dict, *args: Any, **kwargs: Any) -> None:
+    async def execute(self, *args: Any, **kwargs: Any) -> None:
         """
         Execute a firmware instruction.
 
@@ -551,18 +666,29 @@ class CoSimWrapperBase(ABC):
         appropriate module instances.
 
         Args:
-            inst (dict): Firmware instruction dictionary with keys:
-                - "op" (str): Operation name
-                - "addr" (int): Starting address
-                - "len" (int): Operation length
+        inst (dict): Firmware instruction dictionary with keys:
+            - "op" (str): Operation name
+            - "addr" (int): Starting address
+            - "len" (int): Operation length
 
         Example:
-            async def execute(self, inst: dict):
-                op = inst["op"]
-                module = self.modules.get(op)
-                if module:
-                    await module.execute(inst)
+        async def execute(self, inst: dict):
+            op = inst["op"]
+            module = self.modules.get(op)
+            if module:
+                await module.execute(inst)
         """
+        if self.level == "ut":
+            await self.execute_unit_test(*args, **kwargs)
+        elif self.level == "st":
+            await self.execute_system_test(*args, **kwargs)
+
+    @abstractmethod
+    async def execute_unit_test(self, *args: Any, **kwargs: Any) -> Optional[Any]:
+        pass
+
+    @abstractmethod
+    async def execute_system_test(self, *args: Any, **kwargs: Any) -> Optional[Any]:
         pass
 
     async def wait_compare(self) -> None:

@@ -6,15 +6,16 @@ from cocotb.clock import Clock
 from cocotb.utils import get_sim_time
 from cocotb.handle import Immediate
 
+
 @dataclass
 class sub_one_input_trans(BaseTransaction):
-    len:int
-    fifo_read_data:np.array
+    len: int
+    fifo_read_data: np.array
 
     def clear(self):
         self.len = 0
         self.fifo_read_data = np.array([])
-    
+
     @classmethod
     def empty(cls):
         return cls(len=0, fifo_read_data=np.array([]))
@@ -26,13 +27,17 @@ class sub_one_input_trans(BaseTransaction):
             return False
         return np.array_equal(self.fifo_read_data, other.fifo_read_data)
 
+    def copy(self):
+        return sub_one_input_trans(len=self.len, fifo_read_data=np.copy(self.fifo_read_data))
+
+
 @dataclass
 class sub_one_output_trans(BaseTransaction):
-    fifo_write_data:np.array
+    fifo_write_data: np.array
 
     def clear(self):
         self.fifo_write_data = np.array([])
-    
+
     @classmethod
     def empty(cls):
         return cls(fifo_write_data=np.array([]))
@@ -41,111 +46,114 @@ class sub_one_output_trans(BaseTransaction):
         if not isinstance(other, sub_one_output_trans):
             return False
         return np.array_equal(self.fifo_write_data, other.fifo_write_data)
-   
+
+    def copy(self):
+        return sub_one_output_trans(fifo_write_data=np.copy(self.fifo_write_data))
+
+
 class sub_one_model(BaseModel):
     def __init__(self, in_queue, exp_queue, name="sub_one_sw_model"):
         super().__init__(in_queue, exp_queue, name)
 
-    async def run(self):
-        while True:
-            trans = await self.in_queue.get()
-            self.log.info(f"[Model Input] len={trans.len}, fifo_read_data={trans.fifo_read_data}")
-            exp_trans = self.compute(trans)
-            self.log.info(f"[Model Output] exp_fifo_write_data={exp_trans.fifo_write_data}")
-            self.exp_queue.put_nowait(exp_trans)
-    
     def compute(self, input_trans: sub_one_input_trans) -> sub_one_output_trans:
         exp_fifo_write_data = input_trans.fifo_read_data-1
         exp_trans = sub_one_output_trans(fifo_write_data=exp_fifo_write_data)
         return exp_trans
 
+
 class sub_one_driver(BaseDriver):
     def __init__(self, dut, name="sub_one_driver"):
         super().__init__(dut, name)
 
-    async def run(self, inst):
+    async def run(self, inst, level="ut", en_sig=None, len_sig=None):
         self.log.info(f"[Driver] inst={inst}")
+        if level == "ut":
+            en = self.dut.en
+            len = self.dut.len
+        elif level == "st":
+            en = en_sig
+            len = len_sig
         if inst["op"] == "sub_one":
-            dut = self.dut
-            await RisingEdge(dut.clk)
-            dut.en.value = 1
-            dut.len.value = inst["len"]
-            await RisingEdge(dut.clk)
-            dut.en.value = 0
-            dut.len.value = 0
-            
+            await RisingEdge(self.dut.clk)
+            en.value = 1
+            len.value = inst["len"]
+            await RisingEdge(self.dut.clk)
+            en.value = 0
+            len.value = 0
+
+
 class sub_one_output_monitor(BaseMonitor):
     def __init__(self, dut, act_queue, name="sub_one_output_monitor"):
         super().__init__(dut, act_queue, name)
         self.output_trans = sub_one_output_trans.empty()
-    
-    @always_sample_next()
-    async def run(self):
-            if self.dut.fifo_write_en.value == 1:
-                data = int(self.dut.fifo_write_data.value)
-                self.output_trans.fifo_write_data = np.append(self.output_trans.fifo_write_data, data)
-            else:
-                if len(self.output_trans.fifo_write_data) > 0:
-                    fifo_write_data = np.array(self.output_trans.fifo_write_data)
-                    output_trans = sub_one_output_trans(fifo_write_data=fifo_write_data)
-                    self.queue.put_nowait(output_trans)
-                    self.log.info(f"[Output Monitor PUT] fifo_write_data={fifo_write_data}")
-                    self.output_trans.clear()
-                    
+
+    async def sample(self, *args, **kwargs):
+        if self.dut.fifo_write_en.value == 1:
+            data = int(self.dut.fifo_write_data.value)
+            self.output_trans.fifo_write_data = np.append(
+                self.output_trans.fifo_write_data, data)
+        else:
+            if len(self.output_trans.fifo_write_data) > 0:
+                self.queue.put_nowait(self.output_trans.copy())
+                self.log.info(
+                    f"[Output Monitor PUT] fifo_write_data={self.output_trans.fifo_write_data}")
+                self.output_trans.clear()
+
+
 class sub_one_input_monitor(BaseMonitor):
     def __init__(self, dut, in_queue, name="sub_one_input_monitor"):
         super().__init__(dut, in_queue, name)
         self.input_trans = sub_one_input_trans.empty()
-    
-    @always_sample_next()
-    async def run(self):
-        if self.dut.en.value == 1: 
+
+    async def sample(self, *args, **kwargs):
+        if self.dut.en.value == 1:
             self.input_trans.len = int(self.dut.len.value)
         if self.dut.fifo_read_en.value == 1:
-            self.input_trans.fifo_read_data = np.append(self.input_trans.fifo_read_data, int(self.dut.fifo_read_data.value))
-            self.log.info(f"read data{self.input_trans.fifo_read_data}")
+            self.input_trans.fifo_read_data = np.append(
+                self.input_trans.fifo_read_data, int(self.dut.fifo_read_data.value))
         else:
             if len(self.input_trans.fifo_read_data) > 0:
-                fifo_read_data=np.array(self.input_trans.fifo_read_data)
-                trans = sub_one_input_trans(len=self.input_trans.len, fifo_read_data=fifo_read_data)
-                self.log.info(f"[Input Monitor PUT] len={self.input_trans.len}, ram_rdata={fifo_read_data}")
-                self.queue.put_nowait(trans)
+                self.log.info(
+                    f"[Input Monitor PUT] len={self.input_trans.len}, ram_rdata={self.input_trans.fifo_read_data}")
+                self.queue.put_nowait(self.input_trans.copy())
                 self.input_trans.clear()
-                    
+
+
 class sub_one_scoreboard(BaseScoreboard):
     def __init__(self, act_queue, exp_queue, name="sub_one_scoreboard"):
         super().__init__(act_queue, exp_queue, name)
-        
-    async def run(self):
-        while True:
-            actual_trans = await self.act_queue.get()
-            expected_trans = await self.exp_queue.get()
 
-            self.log.info(f"[Compare] Actual fifo_data: {actual_trans.fifo_write_data}")
-            self.log.info(f"[Compare] Expected fifo_data: {expected_trans.fifo_write_data}")
 
-            if actual_trans == expected_trans:
-                self.match_count += 1
-                self.log.info(f"[Result] MATCH! match_count={self.match_count}")
-            else:
-                self.error_count += 1
-                self.log.error(f"[Result] MISMATCH! error_count={self.error_count}")
-    
 class sub_one_cosim(CoSimBase):
-    def __init__(self, dut, name="sub_one_cosim"):
-        super().__init__(dut, sub_one_model, sub_one_driver, sub_one_input_monitor, sub_one_output_monitor, sub_one_scoreboard, name) 
-    
-    async def execute(self, inst, mode = "hw", input_trans = None):
+    def __init__(self, dut, name="sub_one_cosim", mode="hw", level="ut"):
+        super().__init__(dut, sub_one_model, sub_one_driver, sub_one_input_monitor,
+                         sub_one_output_monitor, sub_one_scoreboard, mode, level, name)
+
+    async def execute_unit_test(self, inst, fifo):
+        if self.mode == "hw":
+            await self.wait_idle()
+            await self.driver.run(inst, level="ut")
+            self.executed_inst_num += 1
+        elif self.mode == "sw":
+            in_trans = self.get_in_trans(inst, fifo)
+            out_trans = self.model.compute(in_trans)
+            fifo.push(out_trans.fifo_write_data)
+            self.executed_inst_num += 1
+            self.scoreboard.match_count += 1
+            self.log.info(
+                f"[SW Execute] Pushed out_trans.fifo_write_data={out_trans.fifo_write_data} to fifo")
+
+    async def execute_system_test(self, inst, en_sig, len_sig):
+        await self.driver.run(inst, level="st", en_sig=en_sig, len_sig=len_sig)
+
+    def get_in_trans(self, inst, fifo):
+        length = inst["len"]
+        fifo_read_data = fifo.pop(length)
+        input_trans = sub_one_input_trans(len=length, fifo_read_data=fifo_read_data)
+        return input_trans
+
+    async def wait_idle(self):
         while True:
             await RisingEdge(self.dut.clk)
-            if(self.dut.busy.value == 0):
+            if (self.dut.busy.value == 0):
                 break
-        if mode == "hw":
-            await self.driver.run(inst)
-            self.executed_inst_num = self.executed_inst_num+1
-        if mode == "sw":
-            self.executed_inst_num = self.executed_inst_num+1
-            self.scoreboard.match_count += 1
-            output_trans = self.model.compute(input_trans)
-            self.log.info(f"[SW Execute] inst={inst}, input_trans ={input_trans}, output_trans={output_trans}")
-            return output_trans
