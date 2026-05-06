@@ -9,27 +9,28 @@ from cocotb.triggers import RisingEdge
 import os
 
 if "ST" in os.environ:
-    mode = "st" if os.environ["ST"] == "1" else "ut"
+    level = "st" if os.environ["ST"] == "1" else "ut"
 else:
-    mode = "ut"
+    level = "ut"
 
-if mode == "st":
+if level == "st":
     cocotb.log.info("Running in ST mode")
-else:       
+else:
     cocotb.log.info("Running in UT mode")
 
 firmware = [
-    {"op":"add_one","addr":0, "len":5},
-    {"op":"sub_one","len":3},
-    {"op":"sub_one","len":2}
+    {"op": "add_one", "addr": 0, "len": 5},
+    {"op": "sub_one", "len": 3},
+    {"op": "sub_one", "len": 2}
 ]
 
 logging.basicConfig(
     filename='cosim.log',
     filemode='w',
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s' # 日志格式
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # 日志格式
 )
+
 
 @cocotb.test()
 async def test(dut):
@@ -42,8 +43,8 @@ async def test(dut):
     await RisingEdge(dut.clk)
     dut.rst_n.value = 1
 
-    if mode == "st":
-    # backdoor write success
+    if level == "st":
+        # backdoor write success
         dut.u_single_port_ram.mem[0].value = 10
         dut.u_single_port_ram.mem[1].value = 20
         dut.u_single_port_ram.mem[2].value = 30
@@ -54,8 +55,19 @@ async def test(dut):
         cocotb.log.info(f"After one cycle RAM[0]: {dut.u_single_port_ram.mem[0].value}")
 
     # class init
-    cosim_test_wrapper_modules = [("add_one_cosim", add_one_cosim, dut.u_add_one), ("sub_one_cosim", sub_one_cosim, dut.u_sub_one)]
-    cosim_test_wrapper_instance = cosim_test_wrapper(dut, cosim_test_wrapper_modules, mode)
+    if level == "ut":
+        cosim_test_wrapper_modules = [
+            ("add_one_cosim", add_one_cosim, dut.u_add_one, {"mode": "sw", "level": "ut"}),
+            ("sub_one_cosim", sub_one_cosim, dut.u_sub_one, {"mode": "sw", "level": "ut"})
+        ]
+    else:
+        cosim_test_wrapper_modules = [
+            ("add_one_cosim", add_one_cosim, dut.u_add_one, {"mode": "hw", "level": "st"}),
+            ("sub_one_cosim", sub_one_cosim, dut.u_sub_one, {"mode": "hw", "level": "st"})
+        ]
+    cosim_test_wrapper_instance = cosim_test_wrapper(
+        dut, cosim_test_wrapper_modules, level=level)
     sys_ctrl_instance = sys_ctrl(cosim_test_wrapper_instance, firmware)
+
     # sim
     await sys_ctrl_instance.execute()

@@ -3,19 +3,20 @@ from .memory import *
 from .add_one_cosim import *
 from .sub_one_cosim import *
 
+
 class ram_model(RAM):
     def __init__(self, size, depth, block_num, addr_sig, rdata_sig):
         super().__init__(size, depth, block_num)
         self.addr_sig = addr_sig
         self.rdata_sig = rdata_sig
-        cocotb.start_soon(self.run())
-        
+
     async def run(self):
         if 'X' in str(self.addr_sig.value):
             self.rdata_sig.value = 0
         while True:
             await ValueChange(self.addr_sig)
-            self.rdata_sig.value = int(self.read(0,int(self.addr_sig.value),1)[0][0])
+            self.rdata_sig.value = int(self.read(0, int(self.addr_sig.value), 1)[0][0])
+
 
 class fifo_model(FIFO):
     def __init__(self, size, depth, clk_sig, fifo_read_en_sig, fifo_read_data_sig, fifo_write_en_sig_0, fifo_write_data_sig_0,
@@ -28,8 +29,7 @@ class fifo_model(FIFO):
         self.fifo_write_en_sig_1 = fifo_write_en_sig_1
         self.fifo_write_data_sig_1 = fifo_write_data_sig_1
         self.clk_sig = clk_sig
-        cocotb.start_soon(self.run())
-        
+
     async def run(self):
         async def read_coroutine():
             while True:
@@ -38,7 +38,7 @@ class fifo_model(FIFO):
                     self.fifo_read_data_sig.value = 0
                 if self.fifo_read_en_sig.value == 1:
                     self.fifo_read_data_sig.value = int(self.pop(1)[0][0])
-        
+
         async def write_coroutine():
             while True:
                 await RisingEdge(self.clk_sig)
@@ -48,68 +48,45 @@ class fifo_model(FIFO):
                     self.push(np.array([[int(self.fifo_write_data_sig_1.value)]]))
         cocotb.start_soon(read_coroutine())
         cocotb.start_soon(write_coroutine())
-   
+
+
 class cosim_test_wrapper(CoSimWrapperBase):
-    def __init__(self, dut, modules, mode, name="cosim_test_wrapper"):
-        super().__init__(dut, modules, mode, name)
-        self.ram = ram_model(1,16,1,dut.u_add_one.ram_addr,dut.u_add_one.ram_rdata)
-        self.fifo = fifo_model(1,16,dut.clk,dut.u_sub_one.fifo_read_en, dut.u_sub_one.fifo_read_data, dut.u_add_one.fifo_write_en, dut.u_add_one.fifo_write_data, dut.u_sub_one.fifo_write_en, dut.u_sub_one.fifo_write_data)
+    def __init__(self, dut, modules, level="ut", name="cosim_test_wrapper"):
+        super().__init__(dut, modules, level=level, name=name)
+        self.ram = ram_model(1, 16, 1, dut.u_add_one.ram_addr, dut.u_add_one.ram_rdata)
+        self.fifo = fifo_model(1, 16, dut.clk, dut.u_sub_one.fifo_read_en, dut.u_sub_one.fifo_read_data, dut.u_add_one.fifo_write_en,
+                               dut.u_add_one.fifo_write_data, dut.u_sub_one.fifo_write_en, dut.u_sub_one.fifo_write_data)
+        if self.level == "ut":
+            cocotb.start_soon(self.ram.run())
+            cocotb.start_soon(self.fifo.run())
         cocotb.start_soon(self.backdoor_handler())
 
-    async def execute(self, inst, mode):
-        if(self.mode == "ut"):
-            await self.wait_compare()
-            if(inst["op"] == "add_one"):
-                module = "add_one_cosim"
-            if(inst["op"] == "sub_one"):
-                module = "sub_one_cosim"
-            if mode == "hw":
-                input_trans = None
-            else:
-                input_trans = self.decode(inst)
-            output_trans = await self.modules[module].execute(inst, mode, input_trans)
-            if output_trans is not None:
-                self.fifo.push(output_trans.fifo_write_data)
-                self.log.info(f"[Cosim Wrapper] Pushed output_trans.fifo_write_data={output_trans.fifo_write_data} to fifo")
-            
-        elif(self.mode == "st"):
-            await self.wait_compare()
-            if(inst["op"] == "add_one"):
-                dut = self.dut
-                dut.en_add.value = 1
-                dut.len_add.value = inst["len"]
-                dut.addr_add.value = inst["addr"]
-                await RisingEdge(dut.clk)
-                dut.en_add.value = 0
-                dut.len_add.value = 0
-                dut.addr_add.value = 0
+    async def execute_system_test(self, inst, top: bool = True, en_sig=None, len_sig=None):
+        await self.wait_compare()
+        if top is True:
+            if inst["op"] == "add_one":
+                await self.modules["add_one_cosim"].execute(inst=inst, en_sig=self.dut.en_add, len_sig=self.dut.len_add, addr_sig=self.dut.addr_add)
                 self.modules["add_one_cosim"].executed_inst_num += 1
-            if(inst["op"] == "sub_one"):
-                dut = self.dut
-                await RisingEdge(dut.clk)
-                dut.en_sub.value = 1
-                dut.len_sub.value = inst["len"]
-                await RisingEdge(dut.clk)
-                dut.en_sub.value = 0
-                dut.len_sub.value = 0
+            elif inst["op"] == "sub_one":
+                await self.modules["sub_one_cosim"].execute(inst=inst, en_sig=self.dut.en_sub, len_sig=self.dut.len_sub)
+                self.modules["sub_one_cosim"].executed_inst_num += 1
+        else:
+            if inst["op"] == "sub_one":
+                await self.modules["sub_one_cosim"].execute(inst=inst, en_sig=en_sig, len_sig=len_sig)
                 self.modules["sub_one_cosim"].executed_inst_num += 1
 
-    def decode(self, inst):
+    async def execute_unit_test(self, inst):
+        await self.wait_compare()
         if inst["op"] == "add_one":
-            addr = inst["addr"]
-            length = inst["len"]
-            ram_rdata = self.ram.read(0, addr, length)
-            input_trans = add_one_input_trans(addr=addr, len=length, ram_rdata=ram_rdata)
-            return input_trans
-        if inst["op"] == "sub_one":
-            length = inst["len"]
-            fifo_read_data = self.fifo.pop(length)
-            input_trans = sub_one_input_trans(len=length, fifo_read_data=fifo_read_data)
-            return input_trans
+            await self.modules["add_one_cosim"].execute(inst=inst, ram=self.ram, fifo=self.fifo)
+        elif inst["op"] == "sub_one":
+            await self.modules["sub_one_cosim"].execute(inst=inst, fifo=self.fifo)
 
     async def backdoor_handler(self):
         while True:
             await self.modules["add_one_cosim"].scoreboard.error.wait()
             excepted_trans = await self.modules["add_one_cosim"].scoreboard.backdoor_queue.get()
-            self.fifo.write(0, excepted_trans.fifo_write_data.reshape(-1,1))
-            self.log.info(f"[Backdoor Handler] Wrote expected fifo_write_data={excepted_trans.fifo_write_data} to fifo")
+            self.modules["add_one_cosim"].scoreboard.error.clear()
+            self.fifo.write(0, excepted_trans.fifo_write_data.reshape(-1, 1))
+            self.log.info(
+                f"[Backdoor Handler] Wrote expected fifo_write_data={excepted_trans.fifo_write_data} to fifo")
