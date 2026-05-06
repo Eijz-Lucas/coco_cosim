@@ -568,7 +568,7 @@ class CoSimWrapperBase(ABC):
     Type Args:
         dut: The DUT handle from cocotb
         modules: List of module specifications as tuples:
-            (name: str, class: Type, handle: HierarchyObject, config: Dict)
+            (name: str, class: Type, config: Dict)
         level: Verification level - "UT" or "ST"
 
     Usage:
@@ -591,7 +591,7 @@ class CoSimWrapperBase(ABC):
     def __init__(
         self,
         dut: HierarchyObject,
-        modules: List[tuple[str, Type, HierarchyObject, Dict]],
+        modules: List[tuple[str, Type, Dict]],
         level: str = "ut",
         name: str = "CosimWrapperBase",
         *args: Any,
@@ -605,7 +605,7 @@ class CoSimWrapperBase(ABC):
             modules: List of module specifications, each tuple contains:
                 - name (str): Module instance name
                 - class (Type): Module class (not instance)
-                - handle (HierarchyObject): DUT handle for the module
+                - config (Dict): Configuration dict for module init
                 - args (Optional[Tuple]): Positional args for module init
                 - kwargs (Optional[Dict]): Keyword args for module init
             level: Verification level ("UT" or "ST")
@@ -625,13 +625,14 @@ class CoSimWrapperBase(ABC):
         else:
             self.level: str = level
         for module in modules:
-            name, cls, handle, cfg = module[0], module[1], module[2], module[3]
-            self.modules[name] = cls(handle, *args, **cfg, **kwargs)
+            name, cls, cfg = module[0], module[1], module[2]
+            self.modules[name] = cls(*args, **cfg, **kwargs)
         if self.level == "st":
             for module in self.modules.values():
                 if isinstance(module, CoSimBase):
                     if module.mode == "sw":
                         raise RuntimeError(f"{module}'s mode is sw in {self.name} system test")
+        self.log.info(f"******** {self.name} Initiated with level={self.level} ********")
 
     async def execute(self, *args: Any, **kwargs: Any) -> None:
         """

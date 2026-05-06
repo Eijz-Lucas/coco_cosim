@@ -57,13 +57,17 @@ async def test(dut):
     # class init
     if level == "ut":
         cosim_test_wrapper_modules = [
-            ("add_one_cosim", add_one_cosim, dut.u_add_one, {"mode": "sw", "level": "ut"}),
-            ("sub_one_cosim", sub_one_cosim, dut.u_sub_one, {"mode": "sw", "level": "ut"})
+            ("add_one_cosim", add_one_cosim, {
+             "dut": dut.u_add_one, "mode": "hw", "level": "ut"}),
+            ("sub_one_cosim", sub_one_cosim,  {
+             "dut": dut.u_sub_one, "mode": "hw", "level": "ut"})
         ]
     else:
         cosim_test_wrapper_modules = [
-            ("add_one_cosim", add_one_cosim, dut.u_add_one, {"mode": "hw", "level": "st"}),
-            ("sub_one_cosim", sub_one_cosim, dut.u_sub_one, {"mode": "hw", "level": "st"})
+            ("add_one_cosim", add_one_cosim, {
+             "dut": dut.u_add_one, "mode": "hw", "level": "st"}),
+            ("sub_one_cosim", sub_one_cosim, {
+             "dut": dut.u_sub_one, "mode": "hw", "level": "st"})
         ]
     cosim_test_wrapper_instance = cosim_test_wrapper(
         dut, cosim_test_wrapper_modules, level=level)
