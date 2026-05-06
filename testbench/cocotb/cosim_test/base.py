@@ -14,7 +14,7 @@ Classes:
     CoSimWrapperBase: Verification environment wrapper
 
 Decorators:
-    always_sample_next: Continuously sample signals on each clock edge
+    always_sample_next: Continuously sample signals on each next clock edge
 
 Usage Example:
     class MyCosim(CoSimBase):
@@ -56,7 +56,7 @@ class BaseTransaction(ABC):
 
 class BaseModel(ABC):
     """
-    Abstract base class for software reference models.
+    Abstract base class for software reference models. Must impletment compute() method in subclass.
 
     A reference model emulates the DUT's behavior in software, computing
     expected results from input transactions for scoreboard comparison.
@@ -128,7 +128,7 @@ class BaseModel(ABC):
             self.exp_queue.put_nowait(exp_trans)
 
     @abstractmethod
-    def compute(self, *args: Any, **kwargs: Any) -> Any:
+    def compute(self, *args: Any, **kwargs: Any) -> BaseTransaction:
         """
         Compute expected result from input transaction.
 
@@ -146,10 +146,10 @@ class BaseModel(ABC):
 
 class BaseDriver(ABC):
     """
-    Abstract base class for hardware drivers.
+    Abstract base class for hardware drivers. Must impletment run() method in subclass.
 
     A driver controls DUT input signals to stimulate the design according
-    to test scenarios. Only active in UT (Unit Test) mode.
+    to test scenarios.
 
     Attributes:
         name (str): Instance name for logging identification
@@ -172,8 +172,8 @@ class BaseDriver(ABC):
         self,
         dut: HierarchyObject,
         name: str = "Driver",
-        *args,
-        **kwargs
+        *args: Any,
+        **kwargs: Any
     ) -> None:
         """
         Initialize the driver.
@@ -206,7 +206,7 @@ class BaseDriver(ABC):
 
 def always_sample_next(time: int = 10, unit: str = "ns"):
     """
-    Decorator to continuously sample signals on each clock edge.
+    Decorator to continuously sample signals on each next clock edge.
 
     This decorator creates an infinite loop that samples signals
     on every clock edge after a specified delay.
@@ -239,7 +239,7 @@ def always_sample_next(time: int = 10, unit: str = "ns"):
 
 class BaseMonitor(ABC):
     """
-    Abstract base class for hardware monitors.
+    Abstract base class for hardware monitors. Must implement sample() method in subclass.
 
     A monitor observes DUT signals, captures transactions, and sends them
     to queues for model processing or scoreboard comparison.
@@ -383,6 +383,16 @@ class BaseScoreboard(ABC):
             self.compare(act_trans, exp_trans, *args, **kwargs)
 
     def compare(self, act_trans, exp_trans, *args, **kwargs) -> bool:
+        """
+        Compare actual transaction with expected transaction.
+
+        Args:
+            act_trans (Any): Actual transaction from hardware.
+            exp_trans (Any): Expected transaction from reference model.
+
+        Returns:
+            bool: True if matched, False if mismatched.
+        """
         if act_trans == exp_trans:
             self.match_count += 1
             self.log.info(
@@ -459,6 +469,8 @@ class CoSimBase(ABC):
             input_moniter: Input monitor class (not instance)
             output_monitor: Output monitor class (not instance)
             scoreboard: Scoreboard class (not instance)
+            mode: Verification mode ("hw" or "sw")
+            level: Verification level ("ut" or "st")
             name: Instance name for logging (default: "CoSimBase")
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments
@@ -492,6 +504,10 @@ class CoSimBase(ABC):
 
     async def execute(self, *args: Any, **
                       kwargs: Any) -> Optional[BaseTransaction]:
+        """
+        General entry point to execute an operation.
+        Dispatches to `execute_unit_test` or `execute_system_test` based on `self.level`.
+        """
         if self.level == "ut":
             await self.execute_unit_test(*args, **kwargs)
         elif self.level == "st":
@@ -500,15 +516,10 @@ class CoSimBase(ABC):
     @abstractmethod
     async def execute_unit_test(self, *args: Any, **kwargs: Any) -> Optional[BaseTransaction]:
         """
-        Execute a test operation.
+        Execute a unit test operation.
 
         Must be implemented by subclass to define how to drive inputs
-        and increment executed_inst_num.
-
-        Example:
-            async def execute(self, data: int):
-                self.executed_inst_num += 1
-                await self.driver.run(data)
+        and increment `executed_inst_num`.
         """
         pass
 
@@ -519,12 +530,6 @@ class CoSimBase(ABC):
 
         Must be implemented by subclass to define how to drive inputs
         for system-level verification.
-
-        Example:
-            async def execute_system_test(self, inst: dict):
-                op = inst["op"]
-                if op == "add_one":
-                    await self.modules["add_one"].execute(inst)
         """
         pass
 
@@ -555,26 +560,25 @@ class CoSimWrapperBase(ABC):
 
     Attributes:
         dut (HierarchyObject): Reference to the DUT hierarchy
-        mode (str): Verification mode ("UT" or "ST")
+        level (str): Verification level ("UT" or "ST")
         name (str): Instance name for logging identification
         log (Logger): Logger instance for debug messages
-        modules (Dict[str, Any]): Dictionary of module instances
+        modules (List[tuple[str, Type, HierarchyObject, Dict]]): List of module instances
 
     Type Args:
         dut: The DUT handle from cocotb
         modules: List of module specifications as tuples:
-            (name: str, class: Type, handle: HierarchyObject,
-             args: Optional[Tuple], kwargs: Optional[Dict])
-        mode: Verification mode - "UT" or "ST"
+            (name: str, class: Type, handle: HierarchyObject, config: Dict)
+        level: Verification level - "UT" or "ST"
 
     Usage:
         class MyWrapper(CoSimWrapperBase):
-            def __init__(self, dut, mode):
+            def __init__(self, dut, level):
                 modules = [
                     ("add_one", AddOneCosim, dut.add_one_inst, (), {}),
                     ("sub_one", SubOneCosim, dut.sub_one_inst, (), {}),
                 ]
-                super().__init__(dut, modules, mode)
+                super().__init__(dut, modules, level)
 
             async def execute(self, inst: dict):
                 op = inst["op"]
@@ -604,7 +608,7 @@ class CoSimWrapperBase(ABC):
                 - handle (HierarchyObject): DUT handle for the module
                 - args (Optional[Tuple]): Positional args for module init
                 - kwargs (Optional[Dict]): Keyword args for module init
-            mode: Verification mode ("UT" or "ST")
+            level: Verification level ("UT" or "ST")
             name: Instance name for logging (default: "CosimWrapperBase")
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments
@@ -631,23 +635,8 @@ class CoSimWrapperBase(ABC):
 
     async def execute(self, *args: Any, **kwargs: Any) -> None:
         """
-        Execute a firmware instruction.
-
-        Must be implemented by subclass to dispatch instructions to
-        appropriate module instances.
-
-        Args:
-        inst (dict): Firmware instruction dictionary with keys:
-            - "op" (str): Operation name
-            - "addr" (int): Starting address
-            - "len" (int): Operation length
-
-        Example:
-        async def execute(self, inst: dict):
-            op = inst["op"]
-            module = self.modules.get(op)
-            if module:
-                await module.execute(inst)
+        General entry point to execute firmware instruction.
+        Dispatches to unit test or system test execution based on `self.level`.
         """
         if self.level == "ut":
             await self.execute_unit_test(*args, **kwargs)
@@ -656,10 +645,16 @@ class CoSimWrapperBase(ABC):
 
     @abstractmethod
     async def execute_unit_test(self, *args: Any, **kwargs: Any) -> Optional[Any]:
+        """
+        Execute unit test routing. Needs to be implemented by subclass.
+        """
         pass
 
     @abstractmethod
     async def execute_system_test(self, *args: Any, **kwargs: Any) -> Optional[Any]:
+        """
+        Execute system test routing. Needs to be implemented by subclass.
+        """
         pass
 
     async def wait_compare(self) -> None:
