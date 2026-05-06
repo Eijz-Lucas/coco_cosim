@@ -226,10 +226,13 @@ def always_sample_next(time: int = 10, unit: str = "ns"):
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
+            instance = getattr(func, "__self__", args[0] if args else None)
+            if instance is None:
+                raise ValueError("Cannot find the instance (self) to access dut.clk")
             while True:
                 await Timer(time, unit=unit)
                 await func(*args, **kwargs)
-                await RisingEdge(args[0].dut.clk)
+                await RisingEdge(instance.dut.clk)
         return wrapper
     return decorator
 
@@ -291,7 +294,7 @@ class BaseMonitor(ABC):
     async def run(self, *args: Any, **kwargs: Any) -> None:
         decorator = always_sample_next(time=self.clk_period, unit=self.unit)
         always_sample = decorator(self.sample)
-        await always_sample(self, *args, **kwargs)
+        await always_sample(*args, **kwargs)
 
     @abstractmethod
     async def sample(self, *args: Any, **kwargs: Any) -> None:
@@ -377,10 +380,10 @@ class BaseScoreboard(ABC):
 
             self.log.info(f"[{self.name} get Actual Trans] {act_trans}")
             self.log.info(f"[{self.name} get Expected Trans] {exp_trans}")
-            self.compare(*args, **kwargs)
+            self.compare(act_trans, exp_trans, *args, **kwargs)
 
-    def compare(self, *args, **kwargs) -> bool:
-        if self.act_trans == self.exp_trans:
+    def compare(self, act_trans, exp_trans, *args, **kwargs) -> bool:
+        if act_trans == exp_trans:
             self.match_count += 1
             self.log.info(
                 f"[{self.name}] MATCH! match_count={self.match_count}")
@@ -390,36 +393,6 @@ class BaseScoreboard(ABC):
             self.log.error(
                 f"[Result] MISMATCH! error_count={self.error_count}")
             return False
-
-
-def always_sample_next(time: int = 10, unit: str = 'ns'):
-    """
-    Decorator to continuously sample signals on each clock edge.
-
-    This decorator creates an infinite loop that samples signals
-    on every clock edge after a specified delay.
-
-    Args:
-        time (int): Delay time before sampling (default: 10)
-        unit (str): Time unit (default: 'ns')
-
-    Returns:
-        Decorator function
-
-    Usage:
-        @always_sample_next(time=5, unit='ns')
-        async def monitor_signals(self):
-            self.log.info(f"Data: {self.dut.data.value}")
-    """
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            while True:
-                await Timer(time, unit=unit)
-                await func(*args, **kwargs)
-                await RisingEdge(args[0].dut.clk)
-        return wrapper
-    return decorator
 
 
 class CoSimBase(ABC):
@@ -470,9 +443,9 @@ class CoSimBase(ABC):
         input_moniter: Type[BaseMonitor],
         output_monitor: Type[BaseMonitor],
         scoreboard: Type[BaseScoreboard],
-        name: str = "CoSimBase",
         mode: str = "hw",
         level: str = "ut",
+        name: str = "CoSimBase",
         *args: Any,
         **kwargs: Any
     ) -> None:
@@ -614,10 +587,9 @@ class CoSimWrapperBase(ABC):
     def __init__(
         self,
         dut: HierarchyObject,
-        modules: List[str, Type, HierarchyObject, Optional[Dict]],
-        mode: str,
-        name: str = "CosimWrapperBase",
+        modules: List[tuple[str, Type, HierarchyObject, Dict]],
         level: str = "ut",
+        name: str = "CosimWrapperBase",
         *args: Any,
         **kwargs: Any
     ) -> None:
@@ -638,7 +610,6 @@ class CoSimWrapperBase(ABC):
             **kwargs: Additional keyword arguments
         """
         self.dut: HierarchyObject = dut
-        self.mode: str = mode
         self.name: str = name
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
         self.modules: Dict[str, Any] = {}
