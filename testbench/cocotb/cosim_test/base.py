@@ -489,6 +489,8 @@ class CoSimBase(ABC):
             )
         else:
             self.level: str = level
+        if level == "st" and mode == "sw":
+            raise RuntimeError(f"{self.name} cannot be in sw mode for system test")
         self.dut: HierarchyObject = dut
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
         self.in_queue: Queue = Queue()
