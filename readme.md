@@ -9,15 +9,15 @@
 
 框架的核心抽象定义在 `base.py` 中，通过规范化的基类约束了各个验证组件的行为与接口，确保了测试平台的可扩展性与高复用度。
 
-| 基类名称 | 核心职责 | 说明 |
-| :--- | :--- | :--- |
-| `BaseTransaction` | 数据事务抽象 | 贯穿整个验证环境的底层数据结构。各个组件（Monitor、Model、Scoreboard）之间传递的 payload，子类需重写 `__eq__` 方法以支持自动比对。 |
-| `BaseModel` | 软件参考模型 | 纯软件的 Golden Model。通过监听输入队列获取激励，执行计算（`compute` 方法），并将预期结果 (Expected Transaction) 输出至 Scoreboard。 |
-| `BaseDriver` | 硬件驱动器 | 负责在 UT 模式下将事务转换为具体的引脚时序信号，驱动 DUT (Device Under Test)。 |
-| `BaseMonitor` | 硬件监听器 | 包含输入与输出监听器。通过 `@always_sample_next` 装饰器持续在时钟沿采样 DUT 信号，组装成 Transaction 并送入队列供 Model 或 Scoreboard 使用。 |
-| `BaseScoreboard` | 自动比对计分板 | 接收实际输出 (Actual) 与预期输出 (Expected) 队列，执行严格比对，统计 Match/Error 数量，并包含处理 Mismatch 的后门注入 (Backdoor) 机制。 |
-| `CoSimBase` | 模块级协同封装 | 验证组件的顶层容器。负责将 Model、Driver、Monitors 和 Scoreboard 实例化并绑定到特定的 DUT 模块，提供统一的 `execute()` 接口。 |
-| `CoSimWrapperBase` | 系统级环境封装 | 宏观验证环境封装类。负责管理多个 `CoSimBase` 实例以及系统级的共享资源（如 RAM、FIFO 软模型），并根据固件指令进行任务分发与路由。 |
+| 基类名称           | 核心职责       | 说明                                                                                                                                         |
+| :----------------- | :------------- | :------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BaseTransaction`  | 数据事务抽象   | 贯穿整个验证环境的底层数据结构。各个组件（Monitor、Model、Scoreboard）之间传递的 payload，子类需重写 `__eq__` 方法以支持自动比对。           |
+| `BaseModel`        | 软件参考模型   | 纯软件的 Golden Model。通过监听输入队列获取激励，执行计算（`compute` 方法），并将预期结果 (Expected Transaction) 输出至 Scoreboard。         |
+| `BaseDriver`       | 硬件驱动器     | 负责在 UT 模式下将事务转换为具体的引脚时序信号，驱动 DUT (Device Under Test)。                                                               |
+| `BaseMonitor`      | 硬件监听器     | 包含输入与输出监听器。通过 `@always_sample_next` 装饰器持续在时钟沿采样 DUT 信号，组装成 Transaction 并送入队列供 Model 或 Scoreboard 使用。 |
+| `BaseScoreboard`   | 自动比对计分板 | 接收实际输出 (Actual) 与预期输出 (Expected) 队列，执行严格比对，统计 Match/Error 数量，并包含处理 Mismatch 的后门注入 (Backdoor) 机制。      |
+| `CoSimBase`        | 模块级协同封装 | 验证组件的顶层容器。负责将 Model、Driver、Monitors 和 Scoreboard 实例化并绑定到特定的 DUT 模块，提供统一的 `execute()` 接口。                |
+| `CoSimWrapperBase` | 系统级环境封装 | 宏观验证环境封装类。负责管理多个 `CoSimBase` 实例以及系统级的共享资源（如 RAM、FIFO 软模型），并根据固件指令进行任务分发与路由。             |
 
 ---
 
@@ -103,4 +103,101 @@ make ctb-cosim_test
 
 # 运行系统测试 (ST Mode)
 make ctb-cosim_test ST=1
+```
+
+## 🎰 4. 验证框架机制
+
+### 验证框架层次化机制
+
+本验证框架结构的设计参考了UVM，设计了如下基类
+* 基本组件: **driver**, **monitor**, **reference model**, **scoreboard**基类
+* **cosim**基类(参考UVM env)用于封装driver, input monitor, reference model, output monitor, scoreboard组件，在初始化cosim类时会自动初始化其中的组件。
+* **cosim_wrapper**基类用于封装**cosim**类或**cosim_wrapper**类实现, 初始化cosim_wrapper类时会自动初始化其中的所有cosim类和cosim_wrapper类
+
+本验证框架的初始化参考了UVM build phase，只需要在顶层配置module list，即可按照list完成初始化
+
+```python
+sub_wrapper_modules = [
+    ("add_one_cosim", add_one_cosim, {
+        "dut": dut.u_add_one, "mode": "hw", "level": "st"}),
+    ("sub_one_cosim", sub_one_cosim, {
+        "dut": dut.u_sub_one, "mode": "hw", "level": "st"})
+]
+
+wrapper_modules = [
+    ("sub_wrapper", sub_wrapper, sub_wrapper_modules),
+    ("other_modules", other_module, {"mode":hw})
+]
+```
+
+对UT(Unit Test)和ST(System Test)的定义如下
+
+* **UT** 对于单个模块的测试，测试端口(driver, monitor等)采用事务级传输(除非与RAM/FIFO等需要时钟精确的与连接)，可通过cosim类或cosim_wrapper类完成测试。cosim_wrapper类中可以封装多个UT，**UT之间的信号传输通过软件接口完成**，我们把这种测试方法也称为UT。
+* **ST** 对于多个在硬件互联模块整体的测试，可通过cosim_wrapper类完成。**模块间的信号传输通过硬件完成**，此时cosim类中除driver其他的组件工作，激励从cosim_wrapper外部输入。我们规定**UT可以嵌套ST**(此时的ST可看作退化为UT), **ST可嵌套ST**(被嵌套的ST可看作退化为UT)，**ST不可嵌套UT**(因为模块已经在硬件完成互联)
+
+cosim类和cosim_wrapper类提供统一的调用接口，使用类的绑定方法**execute**，对于cosim类和cosim_wrapper类均存在2种调用层次UT和ST，但对于cosim_wrapper类的ST调用还需区分其是否是顶层，如果cosim_wrapper类是顶层，则直接从外部输入激励；否则cosim_wrapper类还可能与其他模块存在互联，这时需要从上一层的外部输入激励。如下面的示意图所示。
+
+![st](pic/image.png)
+
+### 软硬件协同验证机制
+
+本验证框架可以通过设置cosim类的mode分别运行软件模式(software)和硬件模式(hardware)，在软件模式下driver不会产生激励，reference model代替rtl的功能。在UT模式下可任意替换cosim类的为软件模式或硬件模式，在ST模式下cosim类只能是硬件模式
+
+在硬件模式下，如果scoreboard检测到rtl输出错误，可以通过后门访问等方式强行将正确结果写入memory，实现早期软件部分的开发
+
+### 仿真结束机制
+
+cosim类和cosim_wrapper类都自带wait_compare()方法用于等待某个事务的完成，实现原理是比较execute方法驱动的事务数量和scoreboard接受事务的数量。cosim_wrapper类的wait_compare()方法会等待其中所有的cosim_wrapper类或cosim类完成比较
+
+在发送完所有指令后，可调用顶层cosim_wrapper的wait_compare()方法，等完成所有比较后仿真在此处选择结束运行
+
+### 采样时序处理
+
+verilator的时序模型和标准的rtl仿真时序模型相同，但是cocotb在调用仿真器时的行为有点特殊:
+* cocotb在某个时刻(例如时钟上升沿await RisingEdge(dut.clk))采样某个寄存器的值，采样到的是寄存器变化后的值(ps 猜测cocotb的DPI实在time step之前或之后采样或驱动信号)
+* vcs在某个时刻(例如时钟上升沿@(posedge clk))采用某个寄存器的值，采样到的是寄存器变化前的值
+* cocotb驱动信号默认是非阻塞赋值(除非采用Immediate函数)
+
+为了解决cocotb采样的问题，我们只能在当前时钟周期采样下一时钟周期的值，本框架提供了一个Python装饰器，能实现上述效果
+
+```python
+def always_sample_next(time: int = 10, unit: str = "ns"):
+    """
+    Decorator to continuously sample signals on each next clock edge.
+
+    This decorator creates an infinite loop that samples signals
+    on every clock edge after a specified delay.
+
+    Args:
+        time (int): Delay time before sampling (default: 10)
+        unit (str): Time unit (default: 'ns')
+
+    Returns:
+        Decorator function
+
+    Usage:
+        @always_sample_next(time=5, unit='ns')
+        async def monitor_signals(self):
+            self.log.info(f"Data: {self.dut.data.value}")
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            instance = getattr(func, "__self__", args[0] if args else None)
+            if instance is None:
+                raise ValueError("Cannot find the instance (self) to access dut.clk")
+            while True:
+                await Timer(time, unit=unit)
+                await func(*args, **kwargs)
+                await RisingEdge(instance.dut.clk)
+        return wrapper
+    return decorator
+```
+
+### memory处理
+
+RAM和FIFO这类的memory是时钟精确的组件，所以在本验证框架中UT均使用软件模拟RAM和FIFO，而在ST中使用rtl或行为级描述的memory
+在仿真阶段可以通过后门访问写入memory(使用verilator仿真器，rtl代码中需要加入如下注释)
+```verilog
+logic [DATA_WIDTH-1:0] mem[0:(1<<ADDR_WIDTH)-1]/* verilator public_flat_rw */;
 ```
