@@ -66,14 +66,11 @@ class cosim_test_wrapper(CoSimWrapperBase):
         if top is True:
             if inst["op"] == "add_one":
                 await self.modules["add_one_cosim"].execute(inst=inst, en_sig=self.dut.en_add, len_sig=self.dut.len_add, addr_sig=self.dut.addr_add)
-                self.modules["add_one_cosim"].executed_inst_num += 1
             elif inst["op"] == "sub_one":
                 await self.modules["sub_one_cosim"].execute(inst=inst, en_sig=self.dut.en_sub, len_sig=self.dut.len_sub)
-                self.modules["sub_one_cosim"].executed_inst_num += 1
         else:
             if inst["op"] == "sub_one":
                 await self.modules["sub_one_cosim"].execute(inst=inst, en_sig=en_sig, len_sig=len_sig)
-                self.modules["sub_one_cosim"].executed_inst_num += 1
 
     async def execute_unit_test(self, inst):
         await self.wait_compare()

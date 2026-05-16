@@ -5,7 +5,7 @@ from .base import *
 from .cosim_test_wrapper import *
 from .sys_ctrl import *
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.triggers import RisingEdge, Combine
 import os
 
 if "ST" in os.environ:
@@ -21,15 +21,23 @@ else:
 firmware = [
     {"op": "add_one", "addr": 0, "len": 5},
     {"op": "sub_one", "len": 3},
+    {"op": "sub_one", "len": 2},
+    {"op": "add_one", "addr": 0, "len": 5},
+    {"op": "sub_one", "len": 3},
     {"op": "sub_one", "len": 2}
 ]
 
-logging.basicConfig(
-    filename='cosim.log',
-    filemode='w',
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # 日志格式
-)
+simlogger = SimLogger()
+stream_filter = SimLogger.create_filter(
+    level=logging.INFO, message='REPORT', reverse=True)
+simlogger.set_stream(stream_filter)
+sequence_filter = SimLogger.create_filter(name="BaseSequencer")
+SimLogger.add_file_handler("sim.log", filters=[sequence_filter])
+
+
+class cosim_test_sequencer(BaseSequencer):
+    def __init__(self, max_size=10, *args, **kwargs):
+        super().__init__(max_size=max_size, *args, **kwargs)
 
 
 @cocotb.test()
@@ -71,7 +79,13 @@ async def test(dut):
         ]
     cosim_test_wrapper_instance = cosim_test_wrapper(
         dut, cosim_test_wrapper_modules, level=level)
-    sys_ctrl_instance = sys_ctrl(cosim_test_wrapper_instance, firmware)
+    firmware_iterator = iter(firmware)
+    cosim_test_sequencer_instance = cosim_test_sequencer()
 
     # sim
-    await sys_ctrl_instance.execute()
+    await cosim_test_sequencer_instance.run(cosim_test_wrapper_instance, firmware_iterator)
+    await cosim_test_wrapper_instance.wait_compare()
+
+    # report
+    cosim_test_wrapper_instance.report()
+    assert cosim_test_wrapper_instance.success

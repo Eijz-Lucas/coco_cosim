@@ -73,7 +73,7 @@ class add_one_driver(BaseDriver):
         super().__init__(dut, name)
 
     async def run(self, inst, level="ut", en_sig=None, len_sig=None, addr_sig=None):
-        self.log.info(f"[Driver] inst={inst}")
+        self.log.debug(f"[Driver] inst={inst}")
         if level == "ut":
             en = self.dut.en
             len = self.dut.len
@@ -104,13 +104,15 @@ class add_one_output_monitor(BaseMonitor):
             data = int(self.dut.fifo_write_data.value)
             self.output_trans.fifo_write_data = np.append(
                 self.output_trans.fifo_write_data, data)
+        elif len(self.output_trans.fifo_write_data) > 0:
+            self.output_trans.ram_addr.pop()
+            self.log.debug(
+                f"[Output Monitor PUT] ram_addr={self.output_trans.ram_addr}, fifo_write_data={self.output_trans.fifo_write_data}")
+            copy = self.output_trans.copy()
+            self.output_trans.clear()
+            return copy
         else:
-            if len(self.output_trans.fifo_write_data) > 0:
-                self.output_trans.ram_addr.pop()
-                self.queue.put_nowait(self.output_trans.copy())
-                self.log.info(
-                    f"[Output Monitor PUT] ram_addr={self.output_trans.ram_addr}, fifo_write_data={self.output_trans.fifo_write_data}")
-                self.output_trans.clear()
+            return None
 
 
 class add_one_input_monitor(BaseMonitor):
@@ -125,13 +127,15 @@ class add_one_input_monitor(BaseMonitor):
         if self.dut.busy.value == 1:
             self.input_trans.ram_rdata = np.append(
                 self.input_trans.ram_rdata, int(self.dut.ram_rdata.value))
+        elif len(self.input_trans.ram_rdata) > 0:
+            self.input_trans.ram_rdata = np.delete(self.input_trans.ram_rdata, -1)
+            self.log.debug(
+                f"[Input Monitor PUT] addr={self.input_trans.addr}, len={self.input_trans.len}, ram_rdata={self.input_trans.ram_rdata}")
+            copy = self.input_trans.copy()
+            self.input_trans.clear()
+            return copy
         else:
-            if len(self.input_trans.ram_rdata) > 0:
-                self.input_trans.ram_rdata = np.delete(self.input_trans.ram_rdata, -1)
-                self.queue.put_nowait(self.input_trans.copy())
-                self.log.info(
-                    f"[Input Monitor PUT] addr={self.input_trans.addr}, len={self.input_trans.len}, ram_rdata={self.input_trans.ram_rdata}")
-                self.input_trans.clear()
+            return None
 
 
 class add_one_scoreboard(BaseScoreboard):
@@ -145,16 +149,16 @@ class add_one_scoreboard(BaseScoreboard):
             actual_trans = await self.act_queue.get()
             expected_trans = await self.exp_queue.get()
 
-            self.log.info(
+            self.log.debug(
                 f"[Compare] Actual ram_addr: {actual_trans.ram_addr}, len={len(actual_trans.ram_addr)}")
-            self.log.info(
+            self.log.debug(
                 f"[Compare] Expected ram_addr: {expected_trans.ram_addr}, len={len(expected_trans.ram_addr)}")
-            self.log.info(f"[Compare] Actual fifo_data: {actual_trans.fifo_write_data}")
-            self.log.info(f"[Compare] Expected fifo_data: {expected_trans.fifo_write_data}")
+            self.log.debug(f"[Compare] Actual fifo_data: {actual_trans.fifo_write_data}")
+            self.log.debug(f"[Compare] Expected fifo_data: {expected_trans.fifo_write_data}")
 
             if actual_trans == expected_trans:
                 self.match_count += 1
-                self.log.info(f"[Result] MATCH! match_count={self.match_count}")
+                self.log.debug(f"[Result] MATCH! match_count={self.match_count}")
             else:
                 self.error_count += 1
                 self.error.set()
@@ -180,14 +184,11 @@ class add_one_cosim(CoSimBase):
         if self.mode == "hw":
             await self.wait_idle()
             await self.driver.run(inst, level="ut")
-            self.executed_inst_num += 1
         elif self.mode == "sw":
             in_trans = self.get_in_trans(inst, ram)
             out_trans = self.model.compute(in_trans)
             fifo.push(rearrange(out_trans.fifo_write_data, "x -> x 1"))
-            self.executed_inst_num += 1
-            self.scoreboard.match_count += 1
-            self.log.info(
+            self.log.debug(
                 f"[SW Execute] Pushed out_trans.fifo_write_data={out_trans.fifo_write_data} to fifo")
 
     def get_in_trans(self, inst, ram):

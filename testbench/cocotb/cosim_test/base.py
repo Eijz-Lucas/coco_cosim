@@ -26,11 +26,13 @@ import cocotb
 import logging
 from abc import ABC, abstractmethod
 from cocotb.queue import Queue
-from cocotb.triggers import RisingEdge, Timer
+from cocotb.triggers import RisingEdge, Timer, Combine, Event
 from cocotb.handle import HierarchyObject
+from cocotb.logging import SimLogFormatter, SimTimeContextFilter
 from dataclasses import dataclass
 from typing import List, Tuple, Any, Type, Dict, Optional
 from functools import wraps
+import logging_tree
 
 
 @dataclass
@@ -103,8 +105,8 @@ class BaseModel(ABC):
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
         self.in_queue: Queue = in_queue
         self.exp_queue: Queue = exp_queue
-        cocotb.start_soon(self.run(*args, **kwargs))
-        self.log.info(f"======== {self.name} Initiated ========")
+        self._task = cocotb.start_soon(self.run(*args, **kwargs))
+        self.log.debug(f"======== {self.name} Initiated ========")
 
     async def run(self, *args: Any, **kwargs: Any) -> None:
         """
@@ -122,9 +124,9 @@ class BaseModel(ABC):
         """
         while True:
             in_trans = await self.in_queue.get()
-            self.log.info(f"[{self.name} Input] {in_trans}")
+            self.log.debug(f"[{self.name} Input] {in_trans}")
             exp_trans = self.compute(in_trans, *args, **kwargs)
-            self.log.info(f"[{self.name} Output] {exp_trans}")
+            self.log.debug(f"[{self.name} Output] {exp_trans}")
             self.exp_queue.put_nowait(exp_trans)
 
     @abstractmethod
@@ -185,7 +187,7 @@ class BaseDriver(ABC):
         self.name: str = name
         self.dut: HierarchyObject = dut
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
-        self.log.info(f"======== {self.name} Initiated ========")
+        self.log.debug(f"======== {self.name} Initiated ========")
 
     @abstractmethod
     async def run(self, *args: Any, **kwargs: Any) -> None:
@@ -286,15 +288,21 @@ class BaseMonitor(ABC):
         self.dut: HierarchyObject = dut
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
         self.queue: Queue = queue
+        self.id: int = 0
         self.clk_period: int = clk_period
         self.unit: str = unit
-        cocotb.start_soon(self.run(*args, **kwargs))
-        self.log.info(f"======== {self.name} Initiated ========")
+        self._task = cocotb.start_soon(self.run(*args, **kwargs))
+        self.log.debug(f"======== {self.name} Initiated ========")
 
-    async def run(self, *args: Any, **kwargs: Any) -> None:
-        decorator = always_sample_next(time=self.clk_period, unit=self.unit)
-        always_sample = decorator(self.sample)
-        await always_sample(*args, **kwargs)
+    async def run(self, *args, **kwargs) -> None:
+        while True:
+            await Timer(10, unit='ns')
+            result = await self.sample(*args, **kwargs)
+            if result is not None:
+                result.id = self.id
+                self.id += 1
+                self.queue.put_nowait(result)
+            await RisingEdge(self.dut.clk)
 
     @abstractmethod
     async def sample(self, *args: Any, **kwargs: Any) -> None:
@@ -354,8 +362,8 @@ class BaseScoreboard(ABC):
         self.act_queue: Queue = act_queue
         self.match_count: int = 0
         self.error_count: int = 0
-        cocotb.start_soon(self.run(*args, **kwargs))
-        self.log.info(f"======== {self.name} Initiated ========")
+        self._task = cocotb.start_soon(self.run(*args, **kwargs))
+        self.log.debug(f"======== {self.name} Initiated ========")
 
     async def run(self, *args: Any, **kwargs: Any) -> None:
         """
@@ -378,8 +386,8 @@ class BaseScoreboard(ABC):
             act_trans = await self.act_queue.get()
             exp_trans = await self.exp_queue.get()
 
-            self.log.info(f"[{self.name} get Actual Trans] {act_trans}")
-            self.log.info(f"[{self.name} get Expected Trans] {exp_trans}")
+            self.log.debug(f"[{self.name} get Actual Trans] {act_trans}")
+            self.log.debug(f"[{self.name} get Expected Trans] {exp_trans}")
             self.compare(act_trans, exp_trans, *args, **kwargs)
 
     def compare(self, act_trans, exp_trans, *args, **kwargs) -> bool:
@@ -395,14 +403,58 @@ class BaseScoreboard(ABC):
         """
         if act_trans == exp_trans:
             self.match_count += 1
-            self.log.info(
+            self.log.debug(
                 f"[{self.name}] MATCH! match_count={self.match_count}")
             return True
         else:
             self.error_count += 1
-            self.log.error(
+            self.log.debug(
                 f"[Result] MISMATCH! error_count={self.error_count}")
             return False
+
+
+class BaseSequence(ABC):
+    def __init__(self, name: str = "BaseSequence", *args: Any, **kwargs: Any) -> None:
+        self.name = name
+
+    def __iter__(self):
+        return self
+
+    @abstractmethod
+    def __next__(self):
+        pass
+
+
+class BaseSequencer(ABC):
+    def __init__(self, name="BaseSequencer", max_size=10, *args, **kwargs):
+        self.name = name
+        self.log = logging.getLogger(f"cocotb.{self.name}")
+        self.queue = Queue(max_size)
+        self._task = None
+
+    async def run(self, executor, *sequences):
+        executor_task = cocotb.start_soon(self.set_executor(executor))
+        sequences_task = cocotb.start_soon(self.set_sequences(*sequences))
+        await Combine(executor_task, sequences_task)
+
+    async def set_executor(self, executor):
+        while True:
+            item = await self.queue.get()
+            if item is None:
+                break
+            await executor.execute(item)
+            self.log.debug(f"[{self.name}] {executor.name} has executed {item}")
+
+    async def set_sequences(self, *sequences):
+        tasks = [cocotb.start_soon(self._push_sequence_items(seq)) for seq in sequences]
+        await Combine(*tasks)
+        await self.queue.put(None)
+
+    async def _push_sequence_items(self, sequence):
+        for item in sequence:
+            await self.queue.put(item)
+            self.log.debug(
+                f"[{self.name}] put {item} from sequence {getattr(sequence, 'name', sequence)}")
 
 
 class CoSimBase(ABC):
@@ -502,7 +554,7 @@ class CoSimBase(ABC):
         self.output_monitor: BaseMonitor = output_monitor(self.dut, self.act_queue)
         self.scoreboard: BaseScoreboard = scoreboard(self.act_queue, self.exp_queue)
         self.executed_inst_num: int = 0
-        self.log.info(f"******** {self.name} Initiated ********")
+        self.log.debug(f"******** {self.name} Initiated ********")
 
     async def execute(self, *args: Any, **
                       kwargs: Any) -> Optional[BaseTransaction]:
@@ -512,8 +564,11 @@ class CoSimBase(ABC):
         """
         if self.level == "ut":
             await self.execute_unit_test(*args, **kwargs)
+            if self.mode == "sw":
+                self.scoreboard.match_count += 1
         elif self.level == "st":
             await self.execute_system_test(*args, **kwargs)
+        self.executed_inst_num += 1
 
     @abstractmethod
     async def execute_unit_test(self, *args: Any, **kwargs: Any) -> Optional[BaseTransaction]:
@@ -551,6 +606,18 @@ class CoSimBase(ABC):
                 break
             else:
                 await RisingEdge(self.dut.clk)
+
+    def report(self) -> None:
+        if self.scoreboard.match_count == self.executed_inst_num and self.scoreboard.error_count == 0:
+            self.log.info(
+                f"[{self.name} REPORT] PASS, executed {self.executed_inst_num} instruction")
+        else:
+            self.log.info(
+                f"[{self.name} REPORT] FAIL, executed {self.executed_inst_num} instruction, {self.scoreboard.error_count} failed")
+
+    @property
+    def success(self) -> None:
+        return self.scoreboard.match_count == self.executed_inst_num and self.scoreboard.error_count == 0
 
 
 class CoSimWrapperBase(ABC):
@@ -619,6 +686,7 @@ class CoSimWrapperBase(ABC):
         self.name: str = name
         self.log: logging.Logger = logging.getLogger(f"cocotb.{name}")
         self.modules: Dict[str, Any] = {}
+        self.executed_inst_num: int = 0
         if level not in ("ut", "st"):
             raise ValueError(
                 f"Invalid level: {level} for {
@@ -634,7 +702,7 @@ class CoSimWrapperBase(ABC):
                 if isinstance(module, CoSimBase):
                     if module.mode == "sw":
                         raise RuntimeError(f"{module}'s mode is sw in {self.name} system test")
-        self.log.info(f"******** {self.name} Initiated with level={self.level} ********")
+        self.log.debug(f"******** {self.name} Initiated with level={self.level} ********")
 
     async def execute(self, *args: Any, **kwargs: Any) -> None:
         """
@@ -673,3 +741,67 @@ class CoSimWrapperBase(ABC):
         """
         for module in self.modules.values():
             await module.wait_compare()
+
+    def report(self) -> None:
+        for module in self.modules.values():
+            module.report()
+
+    @property
+    def success(self) -> bool:
+        return all(module.success for module in self.modules.values())
+
+
+class SimLogger():
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        else:
+            raise RuntimeWarning("SimLogger has been created")
+        return cls._instance
+
+    def __init__(self, root_level=logging.DEBUG, cocotb_level=logging.DEBUG):
+        self.root_logger = logging.getLogger()
+        self.root_logger.setLevel(root_level)
+        self.cocotb_logger = logging.getLogger("cocotb").setLevel(cocotb_level)
+
+    def set_stream(self, *configs):
+        for handler in self.root_logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                for config in configs:
+                    if isinstance(config, int):
+                        handler.setLevel(config)
+                    elif isinstance(config, logging.Filter):
+                        handler.addFilter(config)
+                    elif isinstance(config, logging.Formatter):
+                        handler.setFormatter(config)
+
+    @staticmethod
+    def add_file_handler(name, level=logging.DEBUG, mode='w', format=SimLogFormatter(), filters=[]):
+        handler = SimLogger.create_file_handler(name, level, mode, format, filters)
+        logging.getLogger().addHandler(handler)
+
+    @staticmethod
+    def create_file_handler(name, level=logging.DEBUG, mode='w', format=SimLogFormatter(), filters=[]):
+        handler = logging.FileHandler(name, mode=mode)
+        handler.setLevel(level)
+        handler.setFormatter(format)
+        if filters is not []:
+            for filter in filters:
+                handler.addFilter(filter)
+        handler.addFilter(SimTimeContextFilter())
+        return handler
+
+    @staticmethod
+    def create_filter(level=None, name=None, message=None, reverse=False):
+        class CustomFilter(logging.Filter):
+            def filter(self, record):
+                level_meet = record.levelno >= level if level is not None else True
+                name_meet = name in record.name if name is not None else True
+                message_meet = message in record.getMessage() if message is not None else True
+                if reverse:
+                    return (level_meet and name_meet and message_meet)
+                else:
+                    return not (level_meet and name_meet and message_meet)
+        return CustomFilter()

@@ -66,7 +66,7 @@ class sub_one_driver(BaseDriver):
         super().__init__(dut, name)
 
     async def run(self, inst, level="ut", en_sig=None, len_sig=None):
-        self.log.info(f"[Driver] inst={inst}")
+        self.log.debug(f"[Driver] inst={inst}")
         if level == "ut":
             en = self.dut.en
             len = self.dut.len
@@ -94,10 +94,11 @@ class sub_one_output_monitor(BaseMonitor):
                 self.output_trans.fifo_write_data, data)
         else:
             if len(self.output_trans.fifo_write_data) > 0:
-                self.queue.put_nowait(self.output_trans.copy())
-                self.log.info(
+                copy = self.output_trans.copy()
+                self.log.debug(
                     f"[Output Monitor PUT] fifo_write_data={self.output_trans.fifo_write_data}")
                 self.output_trans.clear()
+                return copy
 
 
 class sub_one_input_monitor(BaseMonitor):
@@ -113,10 +114,11 @@ class sub_one_input_monitor(BaseMonitor):
                 self.input_trans.fifo_read_data, int(self.dut.fifo_read_data.value))
         else:
             if len(self.input_trans.fifo_read_data) > 0:
-                self.log.info(
+                copy = self.input_trans.copy()
+                self.log.debug(
                     f"[Input Monitor PUT] len={self.input_trans.len}, ram_rdata={self.input_trans.fifo_read_data}")
-                self.queue.put_nowait(self.input_trans.copy())
                 self.input_trans.clear()
+                return copy
 
 
 class sub_one_scoreboard(BaseScoreboard):
@@ -133,14 +135,11 @@ class sub_one_cosim(CoSimBase):
         if self.mode == "hw":
             await self.wait_idle()
             await self.driver.run(inst, level="ut")
-            self.executed_inst_num += 1
         elif self.mode == "sw":
             in_trans = self.get_in_trans(inst, fifo)
             out_trans = self.model.compute(in_trans)
             fifo.push(out_trans.fifo_write_data)
-            self.executed_inst_num += 1
-            self.scoreboard.match_count += 1
-            self.log.info(
+            self.log.debug(
                 f"[SW Execute] Pushed out_trans.fifo_write_data={out_trans.fifo_write_data} to fifo")
 
     async def execute_system_test(self, inst, en_sig, len_sig):
