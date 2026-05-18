@@ -54,7 +54,7 @@ class cosim_test_wrapper(CoSimWrapperBase):
     def __init__(self, dut, modules, level="ut", name="cosim_test_wrapper"):
         super().__init__(dut, modules, level=level, name=name)
         self.ram = ram_model(1, 16, 1, dut.u_add_one.ram_addr, dut.u_add_one.ram_rdata)
-        self.fifo = fifo_model(1, 16, dut.clk, dut.u_sub_one.fifo_read_en, dut.u_sub_one.fifo_read_data, dut.u_add_one.fifo_write_en,
+        self.fifo = fifo_model(1, 64, dut.clk, dut.u_sub_one.fifo_read_en, dut.u_sub_one.fifo_read_data, dut.u_add_one.fifo_write_en,
                                dut.u_add_one.fifo_write_data, dut.u_sub_one.fifo_write_en, dut.u_sub_one.fifo_write_data)
         if self.level == "ut":
             cocotb.start_soon(self.ram.run())

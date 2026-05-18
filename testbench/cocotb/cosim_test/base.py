@@ -26,10 +26,10 @@ import cocotb
 import logging
 from abc import ABC, abstractmethod
 from cocotb.queue import Queue
-from cocotb.triggers import RisingEdge, Timer, Combine, Event
+from cocotb.triggers import RisingEdge, Timer, Combine, Event, ValueChange
 from cocotb.handle import HierarchyObject
 from cocotb.logging import SimLogFormatter, SimTimeContextFilter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Tuple, Any, Type, Dict, Optional
 from functools import wraps
 import logging_tree
@@ -53,7 +53,7 @@ class BaseTransaction(ABC):
             addr: int
             valid: bool
     """
-    pass
+    id: int | None = field(default=None, kw_only=True)
 
 
 class BaseModel(ABC):
@@ -126,6 +126,7 @@ class BaseModel(ABC):
             in_trans = await self.in_queue.get()
             self.log.debug(f"[{self.name} Input] {in_trans}")
             exp_trans = self.compute(in_trans, *args, **kwargs)
+            exp_trans.id = in_trans.id
             self.log.debug(f"[{self.name} Output] {exp_trans}")
             self.exp_queue.put_nowait(exp_trans)
 
@@ -302,6 +303,7 @@ class BaseMonitor(ABC):
                 result.id = self.id
                 self.id += 1
                 self.queue.put_nowait(result)
+                self.log.debug(f"[{self.name} Sample] {result}")
             await RisingEdge(self.dut.clk)
 
     @abstractmethod
@@ -615,6 +617,13 @@ class CoSimBase(ABC):
             self.log.info(
                 f"[{self.name} REPORT] FAIL, executed {self.executed_inst_num} instruction, {self.scoreboard.error_count} failed")
 
+    def teardown(self) -> None:
+        self.model._task.cancel()
+        self.input_moniter._task.cancel()
+        self.output_monitor._task.cancel()
+        self.scoreboard._task.cancel()
+        self.log.debug(f"[{self.name}] teardown")
+
     @property
     def success(self) -> None:
         return self.scoreboard.match_count == self.executed_inst_num and self.scoreboard.error_count == 0
@@ -746,6 +755,11 @@ class CoSimWrapperBase(ABC):
         for module in self.modules.values():
             module.report()
 
+    def teardown(self) -> None:
+        for module in self.modules.values():
+            module.teardown()
+        self.log.debug(f"[{self.name}] teardown")
+
     @property
     def success(self) -> bool:
         return all(module.success for module in self.modules.values())
@@ -794,14 +808,22 @@ class SimLogger():
         return handler
 
     @staticmethod
-    def create_filter(level=None, name=None, message=None, reverse=False):
+    def create_filter(reverse: bool = False, *configs: dict):
         class CustomFilter(logging.Filter):
             def filter(self, record):
-                level_meet = record.levelno >= level if level is not None else True
-                name_meet = name in record.name if name is not None else True
-                message_meet = message in record.getMessage() if message is not None else True
-                if reverse:
-                    return (level_meet and name_meet and message_meet)
-                else:
-                    return not (level_meet and name_meet and message_meet)
+                for config in configs:
+                    if 'level' in config and not (record.levelno >= config['level']):
+                        continue
+                    if 'name' in config and config['name'] not in record.name:
+                        continue
+                    if 'message' in config and config['message'] not in record.getMessage():
+                        continue
+                    return reverse
+                return not reverse
         return CustomFilter()
+
+
+async def connect_check(signal_0, signal_1):
+    while True:
+        await Combine(ValueChange(signal_0), ValueChange(signal_1))
+        assert signal_0.value == signal_1.value, f"{signal_0} is not equal to {signal_1}"

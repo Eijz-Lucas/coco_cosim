@@ -89,7 +89,7 @@ class sub_one_output_monitor(BaseMonitor):
 
     async def sample(self, *args, **kwargs):
         if self.dut.fifo_write_en.value == 1:
-            data = int(self.dut.fifo_write_data.value)
+            data = self.dut.fifo_write_data.value.to_signed()
             self.output_trans.fifo_write_data = np.append(
                 self.output_trans.fifo_write_data, data)
         else:

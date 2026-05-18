@@ -101,13 +101,11 @@ class add_one_output_monitor(BaseMonitor):
         if self.dut.busy.value == 1:
             self.output_trans.ram_addr.append(int(self.dut.ram_addr.value))
         if self.dut.fifo_write_en.value == 1:
-            data = int(self.dut.fifo_write_data.value)
+            data = self.dut.fifo_write_data.value.to_signed()
             self.output_trans.fifo_write_data = np.append(
                 self.output_trans.fifo_write_data, data)
         elif len(self.output_trans.fifo_write_data) > 0:
             self.output_trans.ram_addr.pop()
-            self.log.debug(
-                f"[Output Monitor PUT] ram_addr={self.output_trans.ram_addr}, fifo_write_data={self.output_trans.fifo_write_data}")
             copy = self.output_trans.copy()
             self.output_trans.clear()
             return copy
@@ -129,8 +127,6 @@ class add_one_input_monitor(BaseMonitor):
                 self.input_trans.ram_rdata, int(self.dut.ram_rdata.value))
         elif len(self.input_trans.ram_rdata) > 0:
             self.input_trans.ram_rdata = np.delete(self.input_trans.ram_rdata, -1)
-            self.log.debug(
-                f"[Input Monitor PUT] addr={self.input_trans.addr}, len={self.input_trans.len}, ram_rdata={self.input_trans.ram_rdata}")
             copy = self.input_trans.copy()
             self.input_trans.clear()
             return copy

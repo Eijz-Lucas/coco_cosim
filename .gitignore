@@ -38,3 +38,5 @@ backend/results/
 outputs/
 reports/
 .vscode
+*.jsonl
+*.json

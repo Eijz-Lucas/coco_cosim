@@ -7,6 +7,8 @@ from .sys_ctrl import *
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Combine
 import os
+import random
+import json
 
 if "ST" in os.environ:
     level = "st" if os.environ["ST"] == "1" else "ut"
@@ -28,11 +30,73 @@ firmware = [
 ]
 
 simlogger = SimLogger()
-stream_filter = SimLogger.create_filter(
-    level=logging.INFO, message='REPORT', reverse=True)
+stream_filter = SimLogger.create_filter(True,
+                                        {'level': logging.INFO, 'message': 'REPORT'},
+                                        {'name': 'regression'},
+                                        {'level': logging.WARNING})
 simlogger.set_stream(stream_filter)
-sequence_filter = SimLogger.create_filter(name="BaseSequencer")
+sequence_filter = SimLogger.create_filter(False, {'name': 'Sequencer'})
 SimLogger.add_file_handler("sim.log", filters=[sequence_filter])
+
+
+class cosim_test_sequence(BaseSequence):
+    def __init__(self, name="cosim_test_sequence", max_count=16, write_file=True, read_file=False, file_name='test_data.jsonl'):
+        super().__init__(name)
+        self.fifo_depth = 8
+        self.fifo_items_num = 0
+        self.max_count = max_count
+        self.count = 0
+        self.write_file: bool = write_file
+        self.read_file: bool = read_file
+        self.file_name = file_name
+
+        if self.read_file:
+            if not os.path.exists(self.file_name):
+                raise FileNotFoundError(f"can't find file {self.file_name}")
+            self.instruction_stream = self._stream_reader()
+            cocotb.log.info(f"[{name}] read file {self.file_name}")
+
+    def _stream_reader(self):
+        with open(self.file_name, 'r', encoding='utf-8') as file:
+            for line in file:
+                line = line.strip()
+                if line:
+                    yield json.loads(line)
+
+    def __next__(self):
+        if self.read_file:
+            try:
+                inst = next(self.instruction_stream)
+                self.count += 1
+                return inst
+            except StopIteration:
+                raise StopIteration
+        else:
+            if self.count >= self.max_count:
+                raise StopIteration
+            self.count += 1
+            if self.fifo_items_num == 0:
+                op = "add_one"
+            elif self.fifo_items_num == self.fifo_depth:
+                op = "sub_one"
+            else:
+                op = random.choice(["add_one", "sub_one"])
+            if op == "add_one":
+                addr = random.randint(0, 7)
+                max_len = min(8-addr, self.fifo_depth-self.fifo_items_num-1)
+                max_len = 1 if max_len <= 1 else max_len
+                length = random.randint(1, max_len)
+                self.fifo_items_num += length
+                inst = {'op': op, 'addr': addr, 'len': length}
+            elif op == "sub_one":
+                max_len = self.fifo_items_num
+                length = random.randint(1, max_len)
+                self.fifo_items_num -= length
+                inst = {'op': op, 'len': length}
+            if self.write_file:
+                with open(self.file_name, 'a', encoding='utf-8') as file:
+                    file.write(json.dumps(inst, ensure_ascii=False) + '\n')
+            return inst
 
 
 class cosim_test_sequencer(BaseSequencer):
@@ -42,6 +106,9 @@ class cosim_test_sequencer(BaseSequencer):
 
 @cocotb.test()
 async def test(dut):
+    # random seed
+    random.seed(0xdeadbeef)
+
     # signal init
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
     dut.rst_n.value = 1
@@ -79,13 +146,26 @@ async def test(dut):
         ]
     cosim_test_wrapper_instance = cosim_test_wrapper(
         dut, cosim_test_wrapper_modules, level=level)
-    firmware_iterator = iter(firmware)
+    # firmware_iterator = iter(firmware)
     cosim_test_sequencer_instance = cosim_test_sequencer()
 
+    # connect check
+    # if level == "st":
+    #     connect_check_task = cocotb.start_soon(connect_check(dut.fifo_write_data_add,
+    #                                                          dut.u_sy_fifo.fifo_write_data))
+    if level == "st":
+        connect_check_task = cocotb.start_soon(connect_check(
+            dut.fifo_read_data_sub, dut.u_sy_fifo.fifo_read_data))
+
     # sim
-    await cosim_test_sequencer_instance.run(cosim_test_wrapper_instance, firmware_iterator)
+    await cosim_test_sequencer_instance.run(cosim_test_wrapper_instance, cosim_test_sequence(write_file=False, read_file=True))
     await cosim_test_wrapper_instance.wait_compare()
 
     # report
     cosim_test_wrapper_instance.report()
     assert cosim_test_wrapper_instance.success
+
+    # teardown
+    cosim_test_wrapper_instance.teardown()
+    if level == "st":
+        connect_check_task.cancel()
