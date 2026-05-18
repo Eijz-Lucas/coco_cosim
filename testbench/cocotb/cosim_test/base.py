@@ -10,11 +10,17 @@ Classes:
     BaseDriver: Abstract base for hardware drivers
     BaseMonitor: Abstract base for hardware monitors
     BaseScoreboard: Abstract base for result comparison
+    BaseSequence: Abstract base for transaction sequence generators
+    BaseSequencer: Abstract base for transaction sequencers/dispatchers
     CoSimBase: Main co-simulation coordinator
     CoSimWrapperBase: Verification environment wrapper
+    SimLogger: Singleton logger manager for the co-simulation environment
 
 Decorators:
     always_sample_next: Continuously sample signals on each next clock edge
+
+Utility functions:
+    connect_check: Continuously assert two signals are equal throughout simulation
 
 Usage Example:
     class MyCosim(CoSimBase):
@@ -75,14 +81,8 @@ class BaseModel(ABC):
 
     Usage:
         class MyModel(BaseModel):
-            async def run(self):
-                while True:
-                    trans = await self.in_queue.get()
-                    result = self.compute(trans)
-                    await self.exp_queue.put(result)
-
             def compute(self, trans):
-                return trans.data + 1
+                return output_trans(data=trans.data + 1)
     """
 
     def __init__(
@@ -244,7 +244,7 @@ class BaseMonitor(ABC):
     """
     Abstract base class for hardware monitors. Must implement sample() method in subclass.
 
-    A monitor observes DUT signals, captures transactions, and sends them
+    A monitor observes DUT signals, captures transactions, automatically add ID, and sends them
     to queues for model processing or scoreboard comparison.
 
     Attributes:
@@ -295,7 +295,7 @@ class BaseMonitor(ABC):
         self._task = cocotb.start_soon(self.run(*args, **kwargs))
         self.log.debug(f"======== {self.name} Initiated ========")
 
-    async def run(self, *args, **kwargs) -> None:
+    async def run(self, *args: Any, **kwargs: Any) -> None:
         while True:
             await Timer(10, unit='ns')
             result = await self.sample(*args, **kwargs)
@@ -307,7 +307,8 @@ class BaseMonitor(ABC):
             await RisingEdge(self.dut.clk)
 
     @abstractmethod
-    async def sample(self, *args: Any, **kwargs: Any) -> None:
+    async def sample(self, *args: Any, **kwargs: Any) -> Optional[BaseTransaction]:
+        """Sample DUT signals and return a transaction, or None if no transaction is captured."""
         pass
 
 
@@ -392,16 +393,18 @@ class BaseScoreboard(ABC):
             self.log.debug(f"[{self.name} get Expected Trans] {exp_trans}")
             self.compare(act_trans, exp_trans, *args, **kwargs)
 
-    def compare(self, act_trans, exp_trans, *args, **kwargs) -> bool:
+    def compare(self, act_trans: BaseTransaction, exp_trans: BaseTransaction, *args: Any, **kwargs: Any) -> bool:
         """
         Compare actual transaction with expected transaction.
 
         Args:
-            act_trans (Any): Actual transaction from hardware.
-            exp_trans (Any): Expected transaction from reference model.
+            act_trans: Actual transaction from hardware.
+            exp_trans: Expected transaction from reference model.
+            *args: Additional positional arguments for subclass overrides.
+            **kwargs: Additional keyword arguments for subclass overrides.
 
         Returns:
-            bool: True if matched, False if mismatched.
+            True if matched, False if mismatched.
         """
         if act_trans == exp_trans:
             self.match_count += 1
@@ -416,30 +419,82 @@ class BaseScoreboard(ABC):
 
 
 class BaseSequence(ABC):
-    def __init__(self, name: str = "BaseSequence", *args: Any, **kwargs: Any) -> None:
-        self.name = name
+    """
+    Abstract base class for transaction sequences.
 
-    def __iter__(self):
+    A sequence generates a stream of transactions that can be fed
+    to a driver through a sequencer. Subclasses must implement
+    ``__next__`` to define the transaction generation logic.
+
+    Attributes:
+        name: Instance name for logging identification.
+
+    Usage:
+        class MySequence(BaseSequence):
+            def __init__(self):
+                super().__init__(name="MySequence")
+                self.data = [1, 2, 3]
+                self.idx = 0
+
+            def __next__(self):
+                if self.idx >= len(self.data):
+                    raise StopIteration
+                item = self.data[self.idx]
+                self.idx += 1
+                return item
+    """
+
+    def __init__(self, name: str = "BaseSequence", *args: Any, **kwargs: Any) -> None:
+        self.name: str = name
+
+    def __iter__(self) -> "BaseSequence":
         return self
 
     @abstractmethod
-    def __next__(self):
+    def __next__(self) -> Any:
+        """Return the next transaction in the sequence. Must raise StopIteration when exhausted."""
         pass
 
 
 class BaseSequencer(ABC):
-    def __init__(self, name="BaseSequencer", max_size=10, *args, **kwargs):
-        self.name = name
-        self.log = logging.getLogger(f"cocotb.{self.name}")
-        self.queue = Queue(max_size)
-        self._task = None
+    """
+    Abstract base class for transaction sequencers.
 
-    async def run(self, executor, *sequences):
+    A sequencer manages a queue of transactions and dispatches them
+    to an executor (typically a driver). It pulls items from one or
+    more sequences and feeds them to the executor in order.
+
+    Attributes:
+        name: Instance name for logging identification.
+        log: Logger instance for debug messages.
+        queue: Internal queue buffering transactions from sequences.
+
+    Usage:
+        class MySequencer(BaseSequencer):
+            pass  # Default behavior is usually sufficient
+
+        seq = MySequencer(name="MySeq", max_size=16)
+        await seq.run(driver, sequence1, sequence2)
+    """
+
+    def __init__(self, name: str = "BaseSequencer", max_size: int = 10, *args: Any, **kwargs: Any) -> None:
+        self.name: str = name
+        self.log: logging.Logger = logging.getLogger(f"cocotb.{self.name}")
+        self.queue: Queue = Queue(max_size)
+
+    async def run(self, executor: Any, *sequences: BaseSequence) -> None:
+        """Start the sequencer: consume sequences and feed items to the executor.
+
+        Args:
+            executor: An object with an ``execute(item)`` coroutine (e.g. a driver).
+            *sequences: One or more BaseSequence instances to iterate over.
+        """
         executor_task = cocotb.start_soon(self.set_executor(executor))
         sequences_task = cocotb.start_soon(self.set_sequences(*sequences))
         await Combine(executor_task, sequences_task)
 
-    async def set_executor(self, executor):
+    async def set_executor(self, executor: Any) -> None:
+        """Pull items from the internal queue and dispatch to the executor."""
         while True:
             item = await self.queue.get()
             if item is None:
@@ -447,12 +502,13 @@ class BaseSequencer(ABC):
             await executor.execute(item)
             self.log.debug(f"[{self.name}] {executor.name} has executed {item}")
 
-    async def set_sequences(self, *sequences):
+    async def set_sequences(self, *sequences: BaseSequence) -> None:
+        """Iterate over sequences and push their items into the internal queue."""
         tasks = [cocotb.start_soon(self._push_sequence_items(seq)) for seq in sequences]
         await Combine(*tasks)
         await self.queue.put(None)
 
-    async def _push_sequence_items(self, sequence):
+    async def _push_sequence_items(self, sequence: BaseSequence) -> None:
         for item in sequence:
             await self.queue.put(item)
             self.log.debug(
@@ -559,7 +615,7 @@ class CoSimBase(ABC):
         self.log.debug(f"******** {self.name} Initiated ********")
 
     async def execute(self, *args: Any, **
-                      kwargs: Any) -> Optional[BaseTransaction]:
+                      kwargs: Any) -> None:
         """
         General entry point to execute an operation.
         Dispatches to `execute_unit_test` or `execute_system_test` based on `self.level`.
@@ -573,7 +629,7 @@ class CoSimBase(ABC):
         self.executed_inst_num += 1
 
     @abstractmethod
-    async def execute_unit_test(self, *args: Any, **kwargs: Any) -> Optional[BaseTransaction]:
+    async def execute_unit_test(self, *args: Any, **kwargs: Any) -> None:
         """
         Execute a unit test operation.
 
@@ -583,7 +639,7 @@ class CoSimBase(ABC):
         pass
 
     @abstractmethod
-    async def execute_system_test(self, *args: Any, **kwargs: Any) -> Optional[BaseTransaction]:
+    async def execute_system_test(self, *args: Any, **kwargs: Any) -> None:
         """
         Execute a system-level test operation.
 
@@ -625,7 +681,7 @@ class CoSimBase(ABC):
         self.log.debug(f"[{self.name}] teardown")
 
     @property
-    def success(self) -> None:
+    def success(self) -> bool:
         return self.scoreboard.match_count == self.executed_inst_num and self.scoreboard.error_count == 0
 
 
@@ -724,16 +780,16 @@ class CoSimWrapperBase(ABC):
             await self.execute_system_test(*args, **kwargs)
 
     @abstractmethod
-    async def execute_unit_test(self, *args: Any, **kwargs: Any) -> Optional[Any]:
+    async def execute_unit_test(self, *args: Any, **kwargs: Any) -> None:
         """
-        Execute unit test routing. Needs to be implemented by subclass.
+        Execute unit test routing. Must be implemented by subclass.
         """
         pass
 
     @abstractmethod
-    async def execute_system_test(self, *args: Any, **kwargs: Any) -> Optional[Any]:
+    async def execute_system_test(self, *args: Any, **kwargs: Any) -> None:
         """
-        Execute system test routing. Needs to be implemented by subclass.
+        Execute system test routing. Must be implemented by subclass.
         """
         pass
 
@@ -766,21 +822,45 @@ class CoSimWrapperBase(ABC):
 
 
 class SimLogger():
-    _instance = None
+    """
+    Singleton logger manager for the co-simulation environment.
 
-    def __new__(cls, *args, **kwargs):
+    Provides centralized logging configuration including stream handlers,
+    file handlers, and custom filters. Only one instance can exist at a time.
+
+    Attributes:
+        root_logger: The root Python logger instance.
+        cocotb_logger: The ``cocotb`` namespace logger.
+
+    Usage:
+        sim_log = SimLogger(root_level=logging.DEBUG)
+        sim_log.set_stream(logging.DEBUG)
+        SimLogger.add_file_handler("sim.log")
+    """
+
+    _instance: Optional["SimLogger"] = None
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> "SimLogger":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         else:
             raise RuntimeWarning("SimLogger has been created")
         return cls._instance
 
-    def __init__(self, root_level=logging.DEBUG, cocotb_level=logging.DEBUG):
-        self.root_logger = logging.getLogger()
+    def __init__(self, root_level: int = logging.DEBUG, cocotb_level: int = logging.DEBUG) -> None:
+        self.root_logger: logging.Logger = logging.getLogger()
         self.root_logger.setLevel(root_level)
-        self.cocotb_logger = logging.getLogger("cocotb").setLevel(cocotb_level)
+        self.cocotb_logger = logging.getLogger("cocotb")
+        self.cocotb_logger.setLevel(cocotb_level)
 
-    def set_stream(self, *configs):
+    def set_stream(self, *configs: Any) -> None:
+        """Configure stream handlers on the root logger.
+
+        Args:
+            *configs: One or more configuration objects applied to each
+                      StreamHandler that is not a FileHandler. Accepted types:
+                      ``int`` (log level), ``logging.Filter``, ``logging.Formatter``.
+        """
         for handler in self.root_logger.handlers:
             if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
                 for config in configs:
@@ -792,25 +872,61 @@ class SimLogger():
                         handler.setFormatter(config)
 
     @staticmethod
-    def add_file_handler(name, level=logging.DEBUG, mode='w', format=SimLogFormatter(), filters=[]):
+    def add_file_handler(name: str, level: int = logging.DEBUG, mode: str = 'w',
+                         format: logging.Formatter = SimLogFormatter(),
+                         filters: List[logging.Filter] = []) -> None:
+        """Create and attach a file handler to the root logger.
+
+        Args:
+            name: Path to the log file.
+            level: Log level for the file handler.
+            mode: File open mode (``'w'`` or ``'a'``).
+            format: Formatter instance.
+            filters: List of filters to apply.
+        """
         handler = SimLogger.create_file_handler(name, level, mode, format, filters)
         logging.getLogger().addHandler(handler)
 
     @staticmethod
-    def create_file_handler(name, level=logging.DEBUG, mode='w', format=SimLogFormatter(), filters=[]):
+    def create_file_handler(name: str, level: int = logging.DEBUG, mode: str = 'w',
+                            format: logging.Formatter = SimLogFormatter(),
+                            filters: List[logging.Filter] = []) -> logging.FileHandler:
+        """Create a configured FileHandler.
+
+        Args:
+            name: Path to the log file.
+            level: Log level for the handler.
+            mode: File open mode (``'w'`` or ``'a'``).
+            format: Formatter instance.
+            filters: List of filters to apply.
+
+        Returns:
+            Configured FileHandler instance with SimTimeContextFilter attached.
+        """
         handler = logging.FileHandler(name, mode=mode)
         handler.setLevel(level)
         handler.setFormatter(format)
-        if filters is not []:
+        if filters:
             for filter in filters:
                 handler.addFilter(filter)
         handler.addFilter(SimTimeContextFilter())
         return handler
 
     @staticmethod
-    def create_filter(reverse: bool = False, *configs: dict):
+    def create_filter(reverse: bool = False, *configs: dict) -> logging.Filter:
+        """Create a custom log filter from configuration dicts.
+
+        Args:
+            reverse: If True, invert the filter result (exclude instead of include).
+            *configs: Dicts with optional keys ``'level'`` (minimum levelno),
+                      ``'name'`` (substring to match in logger name),
+                      ``'message'`` (substring to match in log message).
+
+        Returns:
+            A ``logging.Filter`` subclass instance matching the given criteria.
+        """
         class CustomFilter(logging.Filter):
-            def filter(self, record):
+            def filter(self, record: logging.LogRecord) -> bool:
                 for config in configs:
                     if 'level' in config and not (record.levelno >= config['level']):
                         continue
@@ -823,7 +939,19 @@ class SimLogger():
         return CustomFilter()
 
 
-async def connect_check(signal_0, signal_1):
+async def connect_check(signal_0: Any, signal_1: Any) -> None:
+    """Continuously monitor two signals and assert they remain equal.
+
+    Useful for verifying that two DUT signals should always be connected
+    or carry the same value throughout simulation.
+
+    Args:
+        signal_0: First signal handle.
+        signal_1: Second signal handle.
+
+    Usage:
+        await cocotb.start_soon(connect_check(dut.sig_a, dut.sig_b))
+    """
     while True:
         await Combine(ValueChange(signal_0), ValueChange(signal_1))
         assert signal_0.value == signal_1.value, f"{signal_0} is not equal to {signal_1}"
